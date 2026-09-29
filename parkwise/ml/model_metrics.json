@@ -1,0 +1,10 @@
+{
+    "baseline_mae": 28.9982,
+    "model_mae": 5.1269,
+    "model_rmse": 6.6059,
+    "model_r2": 0.9713,
+    "train_rows": 2995,
+    "test_rows": 750,
+    "dataset_type": "simulated",
+    "prediction_horizon_minutes": 30
+}

@@ -1,0 +1,12 @@
+[
+    "hour",
+    "minute",
+    "day_of_week",
+    "is_weekend",
+    "is_peak_hour",
+    "total_spaces",
+    "occupied_spaces",
+    "distance_km",
+    "price_per_hour",
+    "event_flag"
+]

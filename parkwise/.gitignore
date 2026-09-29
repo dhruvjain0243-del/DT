@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+.env
+*.db
+*.sqlite3
+.streamlit/secrets.toml
+frontend/.streamlit/secrets.toml
+*.log
+.DS_Store
