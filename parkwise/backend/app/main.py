@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 
 from .core.config import get_settings
 from .core.logging import configure_logging
-from .routers import auth, availability, facilities, feedback, parking, predictions, reports, slots, users, vehicles
+from .routers import auth, availability, facilities, feedback, operations, parking, predictions, reports, slots, users, vehicles
 from .schemas.common import HealthResponse
 
 
@@ -31,7 +31,7 @@ app.add_middleware(
     allow_origins=settings.cors_origin_list,
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE"],
-    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID", "X-Scanner-Key"],
 )
 
 
@@ -109,6 +109,7 @@ for api_router in (
     parking.router,
     availability.router,
     feedback.router,
+    operations.router,
     reports.router,
     predictions.router,
 ):

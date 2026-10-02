@@ -14,6 +14,7 @@ PARKWISE is a production-structured academic MVP for authenticated parking opera
 - Live facility, zone, and vehicle-type occupancy computed from active database sessions
 - Find My Vehicle with exact facility, zone, row, slot, map coordinates, parking diagram, and signed slot-QR confirmation
 - Admin facility/zone/slot management, active-session operations, lost-ticket recovery, wrong-slot correction, user management API, reports, CSV export, and audit logs
+- Physical gate and scanner registry with one-time scanner keys, direction enforcement, heartbeat status, immutable scan events, scanner reports, and Excel export
 - Feedback workflow with administrative status updates
 - Cached model loading, optional SHA-256 artifact verification, prediction persistence, metrics, and deterministic fallback
 - Alembic migrations, pytest integration tests, structured JSON logging, Dockerfiles, and Docker Compose
@@ -256,6 +257,17 @@ The current development environment emits a `StarletteDeprecationWarning` while 
 - QR exit: authenticated `POST /api/parking/exit` with the ticket ID and signed ticket QR token. The owner can exit their own session; ADMIN and ATTENDANT can assist with another driver's exit.
 - The Dashboard accepts external scanner output as text for both entry and exit; native device-camera scanning is not included.
 - Exit responses include the ticket, vehicle registration/type, assigned slot, entry and exit times, and parking duration. The session completion and slot release are committed in one database transaction, so live availability reflects the release.
+
+## Physical scanner setup
+
+1. Apply migrations through revision `0003_scanner_api_keys`.
+2. As an ADMIN, create a facility, then create a gate under `/api/operations/facilities/{facility_id}/gates` with `ENTRY`, `EXIT`, or `BOTH` direction.
+3. Register a scanner at `/api/operations/gates/{gate_id}/scanners`. The response contains `api_key` exactly once. The admin web console shows the same one-time value with a secure-save warning; list and status endpoints never return it.
+4. Store the key in the managed scanner/tablet secret store. Do not put it in source code, a QR label, browser localStorage, screenshots, logs, or shared chat. If it is lost or suspected compromised, revoke it and regenerate a replacement from the ADMIN operations page.
+5. The device calls `POST /api/operations/scanners/{scanner_id}/scan` with `X-Scanner-Key`. Entry scans send `{"scan_type":"ENTRY","vehicle_registration":"ABC12345"}`. Exit scans send `{"scan_type":"EXIT","qr_token":"<signed-ticket-token>"}`.
+6. The scanner console at `/scanner-console` is available to ADMIN and ATTENDANT accounts for managed tablets. It keeps the entered key in the current page session only and never persists it automatically.
+
+The API authenticates the scanner, checks gate direction and assignment, changes the parking session and slot transactionally, updates the scanner heartbeat, and appends a scan event. Rejected scans are rolled back and do not alter occupancy. Scanner activity is available from `/api/reports/scanner-summary`; the Excel workbook at `/api/reports/export-xlsx` includes sessions and scan events.
 
 ## ML workflow
 

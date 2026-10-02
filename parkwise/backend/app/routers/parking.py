@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from ..dependencies import CurrentUser, DbSession, require_roles
-from ..models import EntryMethod, ParkingSession, ParkingSessionStatus, User, UserRole, Vehicle
+from ..models import EntryMethod, ParkingSession, ParkingSessionStatus, ScanResult, ScanType, User, UserRole, Vehicle
 from ..schemas.common import MessageResponse
 from ..schemas.parking import (
     ConfirmSlotRequest,
@@ -31,6 +31,7 @@ from ..services.parking import (
     ticket_response,
 )
 from ..services.qr import qr_png_bytes
+from ..services.operations import record_scan_event, validate_scan_context
 
 
 router = APIRouter(prefix="/api/parking", tags=["parking"])
@@ -40,6 +41,13 @@ StaffUser = Depends(require_roles(UserRole.ADMIN, UserRole.ATTENDANT))
 @router.post("/entry", response_model=TicketResponse, status_code=status.HTTP_201_CREATED)
 def entry(data: ParkingEntryRequest, user: CurrentUser, db: DbSession) -> TicketResponse:
     try:
+        _, scanner = validate_scan_context(
+            db,
+            facility_id=data.facility_id,
+            gate_id=data.gate_id,
+            scanner_device_id=data.scanner_device_id,
+            scan_type=ScanType.ENTRY,
+        )
         session = create_entry(db, data, user)
         record_audit(
             db,
@@ -49,6 +57,18 @@ def entry(data: ParkingEntryRequest, user: CurrentUser, db: DbSession) -> Ticket
             entity_id=session.id,
             details={"ticket_id": session.ticket_id},
         )
+        if data.gate_id is not None:
+            record_scan_event(
+                db,
+                facility_id=session.facility_id,
+                gate_id=data.gate_id,
+                scanner_device_id=scanner.id if scanner else None,
+                actor_user_id=user.id,
+                session_id=session.id,
+                scan_type=ScanType.ENTRY,
+                result=ScanResult.SUCCESS,
+                reference=data.scan_reference or session.ticket_id,
+            )
         db.commit()
     except IntegrityError as exc:
         db.rollback()
@@ -113,6 +133,15 @@ def my_history(user: CurrentUser, db: DbSession) -> list[ParkingSession]:
 @router.post("/exit", response_model=ExitResponse)
 def exit_parking(data: ParkingExitRequest, user: CurrentUser, db: DbSession) -> ExitResponse:
     try:
+        session = get_session_by_ticket(db, data.ticket_id)
+        ensure_session_access(user, session)
+        _, scanner = validate_scan_context(
+            db,
+            facility_id=session.facility_id,
+            gate_id=data.gate_id,
+            scanner_device_id=data.scanner_device_id,
+            scan_type=ScanType.EXIT,
+        )
         result = close_session(
             db,
             ticket_id=data.ticket_id,
@@ -127,6 +156,18 @@ def exit_parking(data: ParkingExitRequest, user: CurrentUser, db: DbSession) -> 
             entity_type="parking_session",
             entity_id=data.ticket_id,
         )
+        if data.gate_id is not None:
+            record_scan_event(
+                db,
+                facility_id=session.facility_id,
+                gate_id=data.gate_id,
+                scanner_device_id=scanner.id if scanner else None,
+                actor_user_id=user.id,
+                session_id=session.id,
+                scan_type=ScanType.EXIT,
+                result=ScanResult.SUCCESS,
+                reference=data.scan_reference or data.ticket_id,
+            )
         # Session completion, slot release, and its audit record commit atomically.
         db.commit()
     except Exception:

@@ -15,11 +15,17 @@ class ParkingEntryRequest(BaseModel):
     user_id: int | None = Field(default=None, gt=0)
     entry_method: EntryMethod = EntryMethod.SELF_SERVICE
     slot_qr_token: str | None = Field(default=None, min_length=20)
+    gate_id: int | None = Field(default=None, gt=0)
+    scanner_device_id: int | None = Field(default=None, gt=0)
+    scan_reference: str | None = Field(default=None, max_length=160)
 
 
 class ParkingExitRequest(BaseModel):
     ticket_id: str = Field(min_length=8, max_length=64)
     qr_token: str = Field(min_length=20)
+    gate_id: int | None = Field(default=None, gt=0)
+    scanner_device_id: int | None = Field(default=None, gt=0)
+    scan_reference: str | None = Field(default=None, max_length=160)
 
 
 class ParkingManualExitRequest(BaseModel):

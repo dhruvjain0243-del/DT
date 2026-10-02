@@ -27,6 +27,10 @@ from .enums import (
     SlotStatus,
     UserRole,
     VehicleType,
+    GateDirection,
+    GateType,
+    ScanResult,
+    ScanType,
 )
 
 
@@ -99,6 +103,7 @@ class Facility(Base):
     )
     sessions: Mapped[list[ParkingSession]] = relationship(back_populates="facility")
     predictions: Mapped[list[Prediction]] = relationship(back_populates="facility")
+    gates: Mapped[list[ParkingGate]] = relationship(back_populates="facility", cascade="all, delete-orphan")
 
 
 class ParkingZone(Base):
@@ -200,6 +205,7 @@ class ParkingSession(Base):
     zone: Mapped[ParkingZone] = relationship(back_populates="sessions")
     slot: Mapped[ParkingSlot] = relationship(back_populates="sessions")
     feedback_items: Mapped[list[Feedback]] = relationship(back_populates="session")
+    scan_events: Mapped[list[ScanEvent]] = relationship(back_populates="session")
 
 
 class Feedback(Base):
@@ -275,3 +281,66 @@ class AuditLog(Base):
     entity_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
     details: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class ParkingGate(Base):
+    __tablename__ = "parking_gates"
+    __table_args__ = (
+        UniqueConstraint("facility_id", "name", name="uq_gate_facility_name"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    facility_id: Mapped[int] = mapped_column(ForeignKey("facilities.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    gate_type: Mapped[GateType] = mapped_column(enum_column(GateType, "gate_type"))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    facility: Mapped[Facility] = relationship(back_populates="gates")
+    scanners: Mapped[list[ScannerDevice]] = relationship(back_populates="gate", cascade="all, delete-orphan")
+    scan_events: Mapped[list[ScanEvent]] = relationship(back_populates="gate")
+
+
+class ScannerDevice(Base):
+    __tablename__ = "scanner_devices"
+    __table_args__ = (
+        UniqueConstraint("device_identifier", name="uq_scanner_device_identifier"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    gate_id: Mapped[int] = mapped_column(ForeignKey("parking_gates.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    device_identifier: Mapped[str] = mapped_column(String(160))
+    api_key_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    gate: Mapped[ParkingGate] = relationship(back_populates="scanners")
+    scan_events: Mapped[list[ScanEvent]] = relationship(back_populates="scanner_device")
+
+
+class ScanEvent(Base):
+    __tablename__ = "scan_events"
+    __table_args__ = (
+        Index("ix_scan_events_facility_time", "facility_id", "scanned_at"),
+        Index("ix_scan_events_result_time", "result", "scanned_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    facility_id: Mapped[int] = mapped_column(ForeignKey("facilities.id"), index=True)
+    gate_id: Mapped[int] = mapped_column(ForeignKey("parking_gates.id"), index=True)
+    scanner_device_id: Mapped[int | None] = mapped_column(ForeignKey("scanner_devices.id"), nullable=True, index=True)
+    actor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    session_id: Mapped[int | None] = mapped_column(ForeignKey("parking_sessions.id"), nullable=True, index=True)
+    scan_type: Mapped[ScanType] = mapped_column(enum_column(ScanType, "scan_type"), index=True)
+    result: Mapped[ScanResult] = mapped_column(enum_column(ScanResult, "scan_result"), index=True)
+    reference: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scanned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+    facility: Mapped[Facility] = relationship()
+    gate: Mapped[ParkingGate] = relationship(back_populates="scan_events")
+    scanner_device: Mapped[ScannerDevice | None] = relationship(back_populates="scan_events")
+    actor_user: Mapped[User | None] = relationship()
+    session: Mapped[ParkingSession | None] = relationship(back_populates="scan_events")

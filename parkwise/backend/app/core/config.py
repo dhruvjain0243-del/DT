@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = Field(default=7, ge=1, le=90)
     qr_token_expire_days: int = Field(default=30, ge=1, le=365)
     api_base_url: str = "http://localhost:8000"
-    cors_origins: str = "http://localhost:8501"
+    cors_origins: str = "http://localhost:8501,http://localhost:5173,http://127.0.0.1:5173"
     model_path: Path = PROJECT_ROOT / "ml" / "artifacts" / "parking_model.pkl"
     model_feature_columns_path: Path = (
         PROJECT_ROOT / "ml" / "artifacts" / "feature_columns.json"

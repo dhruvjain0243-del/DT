@@ -37,6 +37,27 @@ class EntryMethod(StrEnum):
     SELF_SERVICE = "SELF_SERVICE"
 
 
+class GateType(StrEnum):
+    ENTRY = "ENTRY"
+    EXIT = "EXIT"
+    BOTH = "BOTH"
+
+
+class GateDirection(StrEnum):
+    IN = "IN"
+    OUT = "OUT"
+
+
+class ScanType(StrEnum):
+    ENTRY = "ENTRY"
+    EXIT = "EXIT"
+
+
+class ScanResult(StrEnum):
+    SUCCESS = "SUCCESS"
+    FAILED = "FAILED"
+
+
 class FeedbackCategory(StrEnum):
     AVAILABILITY = "AVAILABILITY"
     SAFETY = "SAFETY"

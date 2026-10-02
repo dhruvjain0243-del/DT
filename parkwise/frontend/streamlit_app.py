@@ -3,9 +3,11 @@ from __future__ import annotations
 import streamlit as st
 
 from frontend.components.auth import current_role, initialize_auth_state, is_authenticated, sign_out
+from frontend.theme import apply_theme, brand_header
 
 
 st.set_page_config(page_title="PARKWISE", page_icon=":material/local_parking:", layout="wide")
+apply_theme()
 initialize_auth_state()
 
 if not is_authenticated():
@@ -45,12 +47,15 @@ page = st.navigation(pages, position="sidebar")
 
 if is_authenticated():
     user = st.session_state.user
+    brand_header(user)
     with st.sidebar:
         st.caption(f"Signed in as **{user['full_name']}**")
         st.badge(user["role"], color="green")
         if st.button("Log out", icon=":material/logout:", width="stretch"):
             sign_out()
             st.rerun()
+else:
+    brand_header()
 
 st.title(page.title, icon=page.icon)
 page.run()

@@ -5,6 +5,9 @@ from .entities import (
     ParkingSession,
     ParkingSlot,
     ParkingZone,
+    ParkingGate,
+    ScannerDevice,
+    ScanEvent,
     Prediction,
     RevokedToken,
     User,
@@ -18,6 +21,10 @@ from .enums import (
     SlotStatus,
     UserRole,
     VehicleType,
+    GateDirection,
+    GateType,
+    ScanResult,
+    ScanType,
 )
 
 __all__ = [
@@ -31,6 +38,9 @@ __all__ = [
     "ParkingSessionStatus",
     "ParkingSlot",
     "ParkingZone",
+    "ParkingGate",
+    "ScannerDevice",
+    "ScanEvent",
     "Prediction",
     "RevokedToken",
     "SlotStatus",
@@ -38,4 +48,8 @@ __all__ = [
     "UserRole",
     "Vehicle",
     "VehicleType",
+    "GateDirection",
+    "GateType",
+    "ScanResult",
+    "ScanType",
 ]

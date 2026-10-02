@@ -9,5 +9,8 @@ htmlcov/
 *.sqlite3
 .streamlit/secrets.toml
 frontend/.streamlit/secrets.toml
+frontend-web/node_modules/
+frontend-web/dist/
+frontend-web/.env.local
 *.log
 .DS_Store
