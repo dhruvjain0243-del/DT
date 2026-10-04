@@ -1,13 +1,15 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>PARKWISE &middot; Predictive Mobility OS</title>
-  <meta name="description" content="PARKWISE models parking availability across the city in real time, so every arrival starts with a confident decision." />
+  <title>ParkWise · Smart Parking Intelligence</title>
+  <meta name="description" content="ParkWise predicts parking availability and helps drivers make faster, smarter parking decisions." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 </head>
 <body>
 <header class="nav">
@@ -21,7 +23,7 @@
     </div>
     <div>
       <div class="nav-title">PARKWISE</div>
-      <div class="nav-subtitle">PREDICTIVE MOBILITY OS</div>
+      <div class="nav-subtitle">SMART PARKING INTELLIGENCE</div>
     </div>
   </div>
   <nav class="nav-links">
@@ -48,18 +50,18 @@
       <div class="hero-left">
         <div class="hero-eyebrow">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00e5ff" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-          DECISION INTELLIGENCE / NYC CORE
+          SMART PARKING / LIVE INTELLIGENCE
         </div>
-        <h1 class="hero-heading">Find your next spot <span class="hero-accent">before you arrive.</span></h1>
-        <p class="hero-body">PARKWISE models availability across the city in real time, so every arrival starts with a confident decision.</p>
+        <h1 class="hero-heading">Stop searching.<br><span class="hero-accent">Start parking.</span></h1>
+        <p class="hero-body">ParkWise predicts availability, compares your best options, and gets you closer to a spot before you even reach the destination.</p>
       </div>
       <div class="demo-badge">
         <div class="demo-badge-icon">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
         </div>
         <div>
-          <div class="demo-badge-title">DEMO DATA ACTIVE</div>
-          <div class="demo-badge-sub">API-ready fallback for this preview</div>
+          <div class="demo-badge-title">INTELLIGENCE ENGINE</div>
+          <div class="demo-badge-sub">Predictive recommendations · live API</div>
         </div>
       </div>
     </div>
@@ -105,7 +107,8 @@
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#00e5ff" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
             ARRIVAL TIME
           </label>
-          <input type="datetime-local" id="arrivalTime" class="form-input" />
+          <input type="datetime-local" id="arrivalTime" class="form-input" min="2026-01-01T08:00" max="2026-01-30T20:30" step="1800" />
+          <div class="form-hint">Demo forecast window · Jan 1–30, 2026 · 30-minute intervals</div>
         </div>
 
         <div class="form-group">
@@ -185,6 +188,12 @@
         <option value="distance">Sort by distance</option>
       </select>
     </div>
+    <div class="results-summary" id="resultsSummary">
+      <div><span class="summary-kicker">LATEST QUERY</span><strong id="summaryQuery">Awaiting search</strong></div>
+      <div><span class="summary-kicker">OPTIONS</span><strong id="summaryCount">—</strong></div>
+      <div><span class="summary-kicker">BEST MATCH</span><strong id="summaryBest">—</strong></div>
+      <div><span class="summary-kicker">NETWORK AVAILABILITY</span><strong id="summaryAvailability">—</strong></div>
+    </div>
     <div class="locations-grid" id="locationsGrid">
       <div class="empty-state">
         <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#00e5ff" stroke-width="1"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -194,84 +203,124 @@
   </section>
 
   <!-- LIVE MAP TAB -->
-  <section id="tab-livemap" class="tab-pane">
-    <div class="map-layout">
-      <div class="map-container">
-        <div class="map-top-bar">
-          <div>
-            <div class="map-eyebrow">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00e5ff" stroke-width="2"><polygon points="3 11 22 2 13 21 11 13 3 11"/></svg>
-              GEOSPATIAL INTELLIGENCE
-            </div>
-            <h2 class="map-heading">Live parking network</h2>
-          </div>
-          <div class="map-count" id="mapCount">&mdash; monitored nodes</div>
+  <section id="tab-livemap" class="tab-pane map-tab-premium">
+    <div class="map-page-head">
+      <div>
+        <div class="map-eyebrow">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="3 11 22 2 13 21 11 13 3 11"/></svg>
+          GEOSPATIAL INTELLIGENCE
         </div>
-        <div class="map-wrapper">
-          <div class="map-badge">
-            <span class="status-dot"></span> LIVE AVAILABILITY MAP
+        <h2 class="map-heading">Find the best place to park.</h2>
+        <p class="map-subheading">Live recommendations, predicted availability and distance — in one view.</p>
+      </div>
+      <div class="map-head-stats">
+        <div class="map-stat-chip"><span class="live-pulse"></span><b>LIVE</b><span>network</span></div>
+        <div class="map-stat-chip"><b id="mapCount">—</b><span>monitored</span></div>
+      </div>
+    </div>
+
+    <div class="map-layout">
+      <div class="map-container map-container-premium">
+        <div class="map-wrapper map-wrapper-premium">
+          <div class="map-overlay-top">
+            <div class="map-badge"><span class="status-dot"></span> LIVE AVAILABILITY</div>
+            <div class="map-legend">
+              <span><i class="legend-dot available"></i>High</span>
+              <span><i class="legend-dot moderate"></i>Medium</span>
+              <span><i class="legend-dot low"></i>Low</span>
+            </div>
+          </div>
+          <div class="map-controls">
+            <button class="map-control-btn" type="button" title="Map view">＋</button>
+            <button class="map-control-btn" type="button" title="Map view">−</button>
+          </div>
+          <div class="map-center-label">
+            <span class="center-cross"></span>
+            <span>NETWORK VIEW</span>
           </div>
           <div class="map-markers" id="mapMarkers"></div>
-          <iframe
-            id="mapFrame"
-            src="https://www.openstreetmap.org/export/embed.html?bbox=-74.02,40.69,-73.95,40.77&amp;layer=mapnik"
-            style="width:100%;height:100%;border:0;border-radius:12px;"
-            title="NYC parking map"
-          ></iframe>
+          <div id="mapCanvas" aria-label="Interactive Bengaluru parking map"></div>
+          <div class="map-bottom-glass">
+            <div>
+              <span class="map-bottom-label">CURRENT FORECAST</span>
+              <strong id="mapForecastLabel">Ready for your next arrival</strong>
+            </div>
+            <div class="map-bottom-value" id="mapForecastValue">— spots</div>
+          </div>
         </div>
       </div>
 
-      <div class="network-pulse">
+      <div class="network-pulse network-pulse-premium">
         <div class="pulse-title-row">
           <div>
-            <div class="section-eyebrow" style="color:#00e5ff;margin-bottom:4px;font-size:10px;letter-spacing:1.5px">NETWORK PULSE</div>
-            <h2 class="pulse-heading">What&apos;s moving now</h2>
+            <div class="section-eyebrow" style="color:#b5ff71;margin-bottom:5px;font-size:9px;letter-spacing:1.7px">NETWORK PULSE</div>
+            <h2 class="pulse-heading">Parking at a glance</h2>
           </div>
-          <button class="icon-btn" onclick="refreshAll()">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#00e5ff" stroke-width="2"><polyline points="1 4 1 10 7 10"/><polyline points="23 20 23 14 17 14"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg>
+          <button class="icon-btn" onclick="refreshAll()" title="Refresh network">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><polyline points="23 20 23 14 17 14"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg>
           </button>
+        </div>
+
+        <div class="pulse-highlight" id="mapBestPick">
+          <div class="pulse-highlight-icon">1</div>
+          <div>
+            <div class="pulse-highlight-kicker">BEST MATCH</div>
+            <strong id="mapBestName">Run a search to rank parking</strong>
+            <span id="mapBestMeta">Availability · distance · price</span>
+          </div>
         </div>
 
         <div class="pulse-metrics">
           <div class="pulse-metric-row">
             <span class="pulse-metric-label">Network availability</span>
-            <span class="pulse-metric-val" id="pulseAvail">&mdash;%</span>
+            <span class="pulse-metric-val" id="pulseAvail">—%</span>
           </div>
           <div class="progress-bar-track"><div class="progress-bar-fill cyan" id="progressAvail" style="width:0%"></div></div>
 
           <div class="pulse-metric-row" style="margin-top:16px">
             <span class="pulse-metric-label">Forecast confidence</span>
-            <span class="pulse-metric-val" id="pulseConf">&mdash;%</span>
+            <span class="pulse-metric-val" id="pulseConf">—%</span>
           </div>
           <div class="progress-bar-track"><div class="progress-bar-fill green" id="progressConf" style="width:0%"></div></div>
         </div>
 
-        <div class="alert-card" id="alertCard">
+        <div class="alert-card alert-card-premium" id="alertCard">
           <div class="alert-icon">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
           </div>
           <div>
-            <div class="alert-title">Arrival window detected</div>
-            <div class="alert-body" id="alertBody">Loading live intelligence&hellip;</div>
+            <div class="alert-title">Arrival intelligence</div>
+            <div class="alert-body" id="alertBody">Loading live intelligence…</div>
           </div>
+        </div>
+
+        <div class="map-list-header">
+          <span>NEARBY OPTIONS</span>
+          <span>AVAILABILITY</span>
+        </div>
+        <div class="map-locations-list" id="mapLocationsList"></div>
+
+        <div class="selected-spot-bar" id="selectedSpotBar">
+          <div>
+            <span class="selected-kicker">SELECTED PARKING</span>
+            <strong id="selectedSpotName">No spot selected</strong>
+          </div>
+          <button class="btn-action selected-navigate" id="selectedNavigateBtn" onclick="navigateToSelected()" disabled>Navigate</button>
         </div>
 
         <div class="pulse-footer-row">
           <div class="pulse-sync" id="pulseSync">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-            Last model sync &middot; Live snapshot &middot; &mdash; min ago
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#b5ff71" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+            Last model sync · Live snapshot · — min ago
           </div>
-          <button class="btn-ghost" onclick="openFeedbackModal()">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-            Report ground truth
-          </button>
+          <button class="btn-ghost" onclick="openFeedbackModal()">Report ground truth</button>
         </div>
-
-        <div class="map-locations-list" id="mapLocationsList"></div>
       </div>
     </div>
   </section>
 </main>
+
+<div class="pricing-note">Demo parking rates · INR · estimated hourly rate</div>
 
 <footer class="site-footer">
   <span>PARKWISE &middot; AVAILABILITY SCOUT</span>

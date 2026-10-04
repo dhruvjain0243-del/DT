@@ -1,4 +1,4 @@
-﻿/* ============================================
+/* ============================================
    PARKWISE — app.js
    Connects to FastAPI backend at localhost:8000
    ============================================ */
@@ -9,9 +9,34 @@ const API = 'http://localhost:8000';
 let allLocations = [];
 let lastRecommendations = [];
 let lastFetchedAt = null;
+let parkingMap = null;
+let parkingMapMarkers = [];
+let parkingMarkerById = new Map();
+let selectedParking = null;
+let queryLabel = 'Default forecast';
 
 /* ─── Helpers ─── */
 const $ = id => document.getElementById(id);
+
+function formatParkingPrice(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 'Price unavailable';
+
+  // The project uses simulated price values. Present them as realistic
+  // Indian parking rates for the college demonstration.
+  const INR_PRICE_MAP = {
+    15: 30,
+    20: 40,
+    30: 60,
+    10: 20,
+    25: 50,
+    35: 70,
+    40: 80
+  };
+
+  const rupees = INR_PRICE_MAP[numeric] ?? Math.max(10, Math.round(numeric * 2));
+  return `₹${rupees}/hr`;
+}
 
 function showToast(msg, duration = 3000) {
   const t = $('toast');
@@ -70,7 +95,10 @@ function showTab(name, el) {
   $(`tab-${name}`).classList.add('active');
   if (el) el.classList.add('active');
 
-  if (name === 'livemap') renderMapLocations();
+  if (name === 'livemap') {
+    renderMapLocations();
+    setTimeout(() => parkingMap?.invalidateSize(), 80);
+  }
   if (name === 'recommendations') renderLocationsGrid();
 }
 
@@ -132,6 +160,21 @@ function populateFeedbackDropdown() {
   });
 }
 
+/* ─── Demo dataset window ─── */
+const DATASET_MIN = '2026-01-01T08:00';
+const DATASET_MAX = '2026-01-30T20:30';
+const DEFAULT_ARRIVAL = '2026-01-15T09:30';
+
+function initArrivalPicker() {
+  const input = $('arrivalTime');
+  input.min = DATASET_MIN;
+  input.max = DATASET_MAX;
+  input.step = 1800;
+  if (!input.value || input.value < DATASET_MIN || input.value > DATASET_MAX) {
+    input.value = DEFAULT_ARRIVAL;
+  }
+}
+
 /* ─── Fetch Recommendations ─── */
 async function fetchRecommendations() {
   const btn = $('findBtn');
@@ -142,6 +185,13 @@ async function fetchRecommendations() {
   const arrival = $('arrivalTime').value;
   const preference = $('preference').value;
   const parkingType = $('parkingType').value;
+
+  if (arrival && (arrival < DATASET_MIN || arrival > DATASET_MAX)) {
+    showToast('Choose a date/time inside the demo data window: Jan 1–30, 2026.');
+    btn.disabled = false;
+    btnText.textContent = 'Find parking availability';
+    return;
+  }
 
   const body = { preference, parking_type: parkingType };
   if (arrival) {
@@ -160,6 +210,7 @@ async function fetchRecommendations() {
     if (data.success) {
       lastRecommendations = data.recommendations;
       lastFetchedAt = Date.now();
+      queryLabel = `${preference} · ${parkingType} · ${arrival ? arrival.replace('T', ' ') : 'default time'}`;
       renderRecCards(data.recommendations);
       updateKpiConfidence(data.recommendations);
       updateNetworkPulse(data.recommendations);
@@ -214,7 +265,7 @@ function renderRecCards(recs) {
   recs.forEach(r => {
     container.appendChild(buildRecCard(r));
   });
-  // also update recommendations tab
+  updateResultsSummary(recs);
   renderLocationsGrid();
 }
 
@@ -222,7 +273,7 @@ function buildRecCard(r) {
   const pct = r.availability_pct;
   const card = document.createElement('div');
   card.className = 'rec-card';
-  card.onclick = () => { showTab('livemap', $('navLivemap')); };
+  card.onclick = () => { showTab('livemap', $('navLivemap')); setTimeout(() => focusParking(r.parking_id), 140); };
   card.innerHTML = `
     <div class="rec-card-rank-badge ${rankBgClass(r.rank)}">#${r.rank}</div>
     <div class="rec-card-fit ${fitClass(pct)}">${fitLabel(pct)}</div>
@@ -231,13 +282,13 @@ function buildRecCard(r) {
     <div class="rec-card-spots-label">PREDICTED OPEN SPOTS</div>
     <div class="rec-card-spots">${r.predicted_available_spaces}<span class="rec-card-spots-total"> / ${r.total_spaces}</span></div>
     <div class="rec-card-meta">
-      <div class="rec-card-price"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg> $${r.price_per_hour.toFixed(2)}</div>
+      <div class="rec-card-price">${formatParkingPrice(r.price_per_hour)}</div>
       <div><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg> ${r.distance_km.toFixed(1)} km</div>
     </div>
     <div class="rec-avail-bar"><div class="rec-avail-fill ${availClass(pct)}" style="width:${pct}%"></div></div>
     <div class="rec-card-explanation">${r.explanation}</div>
     <div class="rec-card-actions">
-      <button class="btn-action" onclick="event.stopPropagation();showTab('livemap',$('navLivemap'))">
+      <button class="btn-action" onclick="event.stopPropagation();showTab('livemap',$('navLivemap'));setTimeout(()=>focusParking('${r.parking_id}'),140)">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="3 11 22 2 13 21 11 13 3 11"/></svg>
         Focus map
       </button>
@@ -304,7 +355,7 @@ function filterLocations() {
       <div class="rec-avail-bar"><div class="rec-avail-fill ${availClass(pct)}" style="width:${pct}%"></div></div>
       <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:12px;color:var(--text-secondary)">
         <span><b style="color:var(--text-primary);font-size:20px">${r.predicted_available_spaces}</b> / ${r.total_spaces} spots</span>
-        <span style="color:var(--cyan);font-weight:700">$${r.price_per_hour.toFixed(2)}/hr</span>
+        <span style="color:var(--cyan);font-weight:700">${formatParkingPrice(r.price_per_hour)}</span>
         <span>${r.distance_km.toFixed(1)} km</span>
       </div>
       <div style="margin-top:10px;font-size:12px;color:var(--text-muted)">${r.explanation}</div>
@@ -314,14 +365,129 @@ function filterLocations() {
   });
 }
 
+function updateResultsSummary(recs) {
+  const summaryQuery = $('summaryQuery');
+  const summaryCount = $('summaryCount');
+  const summaryBest = $('summaryBest');
+  const summaryAvailability = $('summaryAvailability');
+  if (!summaryQuery) return;
+
+  const avg = recs?.length
+    ? Math.round(recs.reduce((s, r) => s + Number(r.availability_pct || 0), 0) / recs.length)
+    : null;
+
+  summaryQuery.textContent = queryLabel;
+  summaryCount.textContent = recs?.length ?? '—';
+  summaryBest.textContent = recs?.[0]?.parking_name || '—';
+  summaryAvailability.textContent = avg == null ? '—' : `${avg}%`;
+}
+
+function selectParking(parking) {
+  selectedParking = parking;
+  const name = $('selectedSpotName');
+  const btn = $('selectedNavigateBtn');
+  if (name) name.textContent = parking?.parking_name || 'No spot selected';
+  if (btn) btn.disabled = !parking;
+  if (parking) {
+    showToast(`${parking.parking_name} selected`);
+  }
+}
+
+function selectParkingFromMap(parkingId) {
+  const parking = lastRecommendations.find(r => String(r.parking_id) === String(parkingId))
+    || allLocations.find(r => String(r.parking_id) === String(parkingId));
+  if (!parking) return;
+  selectParking(parking);
+}
+
+function navigateToSelected() {
+  if (!selectedParking) {
+    showToast('Select a parking location first.');
+    return;
+  }
+  const lat = Number(selectedParking.latitude);
+  const lng = Number(selectedParking.longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    showToast('Navigation coordinates are unavailable.');
+    return;
+  }
+  const url = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+function focusParking(parkingId) {
+  if (!parkingMap) return;
+  const marker = parkingMarkerById.get(String(parkingId));
+  const parking = lastRecommendations.find(r => String(r.parking_id) === String(parkingId))
+    || allLocations.find(r => String(r.parking_id) === String(parkingId));
+  if (!marker || !parking) return;
+
+  parkingMap.flyTo(marker.getLatLng(), Math.max(parkingMap.getZoom(), 15), {
+    duration: 0.7
+  });
+  marker.openPopup();
+  selectParking(parking);
+}
+
+function zoomMap(direction) {
+  if (!parkingMap) return;
+  if (direction > 0) parkingMap.zoomIn();
+  else parkingMap.zoomOut();
+}
+
 /* ─── Map Markers ─── */
+function initParkingMap() {
+  if (parkingMap || typeof L === 'undefined') return;
+
+  parkingMap = L.map('mapCanvas', {
+    zoomControl: false,
+    attributionControl: true,
+    scrollWheelZoom: true,
+    minZoom: 10,
+    maxZoom: 18
+  }).setView([12.9716, 77.5946], 11);
+
+  // Familiar road-map styling with no API key required.
+  // Uses OpenStreetMap's standard tiles so the map renders reliably in the demo.
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(parkingMap);
+
+  L.control.zoom({ position: 'topright' }).addTo(parkingMap);
+}
+
+function parkingMarkerIcon(rank, pct) {
+  const color = pct >= 60 ? '#b5ff71' : pct >= 30 ? '#f2b84b' : '#ff6b6b';
+  const text = pct >= 60 ? '#071006' : '#111';
+  return L.divIcon({
+    className: 'parkwise-leaflet-marker',
+    html: `
+      <div class="leaflet-parking-pin" style="--pin-color:${color};--pin-text:${text}">
+        <span>${rank}</span>
+      </div>
+      <div class="leaflet-parking-tail" style="--pin-color:${color}"></div>
+    `,
+    iconSize: [42, 50],
+    iconAnchor: [21, 45],
+    popupAnchor: [0, -42]
+  });
+}
+
+function clearParkingMarkers() {
+  parkingMapMarkers.forEach(marker => marker.remove());
+  parkingMapMarkers = [];
+  parkingMarkerById.clear();
+}
+
 function renderMapLocations() {
   const list = $('mapLocationsList');
-  const markers = $('mapMarkers');
-  if (!list || !markers) return;
+  if (!list) return;
 
+  initParkingMap();
   list.innerHTML = '';
-  markers.innerHTML = '';
+
+  if (!parkingMap) return;
 
   const data = lastRecommendations.length ? lastRecommendations : allLocations.map((l,i) => ({
     ...l,
@@ -335,48 +501,118 @@ function renderMapLocations() {
     explanation: 'Run a query for live predictions.',
   }));
 
-  // Map bounds: bbox=-74.02,40.69,-73.95,40.77
-  const minLng = -74.02, maxLng = -73.95;
-  const minLat = 40.69,  maxLat = 40.77;
+  clearParkingMarkers();
+
+  const bounds = [];
+  const best = data[0];
+
+  if (best) {
+    const bestName = $('mapBestName');
+    const bestMeta = $('mapBestMeta');
+    const forecastLabel = $('mapForecastLabel');
+    const forecastValue = $('mapForecastValue');
+
+    if (bestName) bestName.textContent = best.parking_name;
+    if (bestMeta) bestMeta.textContent =
+      `${Math.round(best.availability_pct || 0)}% available · ${(best.distance_km || 0).toFixed(1)} km · ${formatParkingPrice(best.price_per_hour)}`;
+    if (forecastLabel) forecastLabel.textContent =
+      `Best predicted option · ${best.availability_status || 'Available'}`;
+    if (forecastValue) forecastValue.textContent =
+      `${best.predicted_available_spaces ?? '—'} spots`;
+  }
 
   data.forEach((r, i) => {
-    const lat = r.latitude || (minLat + Math.random() * (maxLat - minLat));
-    const lng = r.longitude || (minLng + Math.random() * (maxLng - minLng));
+    const lat = Number(r.latitude);
+    const lng = Number(r.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
 
-    // Map to pixel % of iframe
-    const xPct = ((lng - minLng) / (maxLng - minLng)) * 100;
-    const yPct = (1 - (lat - minLat) / (maxLat - minLat)) * 100;
+    const pct = Math.round(r.availability_pct || 0);
+    const marker = L.marker([lat, lng], {
+      icon: parkingMarkerIcon(r.rank || i + 1, pct),
+      title: r.parking_name
+    }).addTo(parkingMap);
 
-    const marker = document.createElement('div');
-    marker.className = 'map-marker';
-    marker.style.left = xPct + '%';
-    marker.style.top  = yPct + '%';
-    marker.innerHTML = `
-      <div class="map-marker-inner ${markerClass(r.rank)}">
-        <span>${r.rank || i+1}</span>
+    const statusColor = pct >= 60 ? '#b5ff71' : pct >= 30 ? '#f2b84b' : '#ff6b6b';
+
+    marker.bindPopup(`
+      <div class="parkwise-popup">
+        <div class="popup-rank">RANK #${r.rank || i + 1}</div>
+        <h3>${r.parking_name}</h3>
+        <div class="popup-type">${r.parking_type || 'Parking'} · ${(r.distance_km || 0).toFixed(1)} km</div>
+        <div class="popup-main">
+          <strong>${r.predicted_available_spaces ?? '—'}</strong>
+          <span>/ ${r.total_spaces ?? '—'} spots</span>
+        </div>
+        <div class="popup-row">
+          <span>Availability</span>
+          <b style="color:${statusColor}">${pct}%</b>
+        </div>
+        <div class="popup-row">
+          <span>Estimated rate</span>
+          <b>${formatParkingPrice(r.price_per_hour)}</b>
+        </div>
+        <div class="popup-reason">${r.explanation || 'Recommended using availability, proximity and cost.'}</div>
+        <div class="popup-actions">
+          <button class="popup-action popup-primary" data-action="select">Select spot</button>
+          <button class="popup-action" data-action="navigate">Navigate</button>
+        </div>
       </div>
-      <div class="map-marker-tooltip">
-        <b>${r.parking_name}</b><br/>
-        ${r.predicted_available_spaces ?? '—'}/${r.total_spaces ?? '—'} spots · $${(r.price_per_hour||0).toFixed(2)}/hr
-      </div>
-    `;
-    markers.appendChild(marker);
+    `);
 
-    // Sidebar list item
-    const pct = r.availability_pct || 65;
+    marker.on('click', () => {
+      marker.openPopup();
+    });
+
+    marker.on('popupopen', (event) => {
+      const root = event.popup.getElement();
+      if (!root) return;
+      const selectBtn = root.querySelector('[data-action="select"]');
+      const navigateBtn = root.querySelector('[data-action="navigate"]');
+      if (selectBtn) selectBtn.onclick = () => selectParking(r);
+      if (navigateBtn) navigateBtn.onclick = () => {
+        selectParking(r);
+        navigateToSelected();
+      };
+    });
+
+    parkingMapMarkers.push(marker);
+    parkingMarkerById.set(String(r.parking_id), marker);
+    bounds.push([lat, lng]);
+
     const item = document.createElement('div');
     item.className = 'map-loc-item';
-    const dotColor = pct >= 60 ? 'var(--cyan)' : pct >= 30 ? 'var(--amber)' : '#ef4444';
+    const dotColor = pct >= 60 ? 'var(--green)' : pct >= 30 ? 'var(--amber)' : 'var(--red)';
     item.innerHTML = `
       <div class="map-loc-dot" style="background:${dotColor}"></div>
       <div class="map-loc-info">
         <div class="map-loc-name">${r.parking_name}</div>
-        <div class="map-loc-meta">${r.parking_type} · ${(r.distance_km||0).toFixed(1)} km</div>
+        <div class="map-loc-meta">${r.parking_type || 'Parking'} · ${(r.distance_km || 0).toFixed(1)} km · ${formatParkingPrice(r.price_per_hour)}</div>
       </div>
-      <div class="map-loc-avail" style="color:${dotColor}">${Math.round(pct)}%</div>
+      <div class="map-loc-avail" style="color:${dotColor}">${pct}%</div>
     `;
+    item.addEventListener('click', () => {
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        parkingMap.flyTo([lat, lng], Math.max(parkingMap.getZoom(), 14), { duration: 0.7 });
+        marker.openPopup();
+        selectParking(r);
+      }
+    });
     list.appendChild(item);
   });
+
+  if (bounds.length) {
+    parkingMap.fitBounds(bounds, {
+      paddingTopLeft: [60, 80],
+      paddingBottomRight: [60, 110],
+      maxZoom: 14
+    });
+  } else {
+    parkingMap.setView([12.9716, 77.5946], 11);
+  }
+
+  // Remove the old overlay marker layer if present.
+  const oldMarkers = $('mapMarkers');
+  if (oldMarkers) oldMarkers.innerHTML = '';
 }
 
 /* ─── Feedback Modal ─── */
@@ -446,9 +682,11 @@ setInterval(() => {
 
 /* ─── Init ─── */
 async function init() {
+  initArrivalPicker();
   await checkHealth();
   await loadMetrics();
   await loadLocations();
+  updateResultsSummary(lastRecommendations);
   // Auto-fetch default recommendations on load
   await fetchRecommendations();
   updateFooter();
