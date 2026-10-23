@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from ..models.enums import UserRole, VehicleType
 
 
-PASSWORD_PATTERN = re.compile(r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{12,128}$")
+PASSWORD_PATTERN = re.compile(r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,128}$")
 REGISTRATION_PATTERN = re.compile(r"^[A-Z0-9]{5,15}$")
 
 
@@ -22,9 +22,8 @@ def normalize_registration(value: str) -> str:
 class UserRegister(BaseModel):
     full_name: str = Field(min_length=2, max_length=120)
     email: EmailStr
-    college_id: str | None = Field(default=None, min_length=2, max_length=80)
     phone: str | None = Field(default=None, min_length=7, max_length=30)
-    password: str = Field(min_length=12, max_length=128)
+    password: str = Field(min_length=8, max_length=128)
     role: UserRole = UserRole.STUDENT
 
     @field_validator("password")
@@ -32,7 +31,7 @@ class UserRegister(BaseModel):
     def strong_password(cls, value: str) -> str:
         if not PASSWORD_PATTERN.fullmatch(value):
             raise ValueError(
-                "Password must be at least 12 characters and include uppercase, "
+                "Password must be at least 8 characters and include uppercase, "
                 "lowercase, number, and symbol"
             )
         return value

@@ -110,3 +110,10 @@ def decode_token(token: str, expected_type: str | None = None) -> dict[str, Any]
     if expected_type and payload.get("type") != expected_type:
         raise TokenError("Incorrect token type")
     return payload
+
+
+def create_email_verification_token(user_id: int) -> str:
+    settings = get_settings()
+    now = datetime.now(UTC)
+    payload = {"sub": str(user_id), "type": "email_verify", "iat": now, "nbf": now, "exp": now + timedelta(hours=24), "jti": uuid4().hex}
+    return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)

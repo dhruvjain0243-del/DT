@@ -20,3 +20,9 @@ export interface Gate { id: number; facility_id: number; name: string; gate_type
 export interface Scanner { id: number; gate_id: number; name: string; device_identifier: string; is_active: boolean; last_seen_at: string | null; created_at: string; api_key?: string; }
 export interface ScanEvent { id: number; facility_id: number; gate_id: number; scanner_device_id: number | null; actor_user_id: number | null; session_id: number | null; scan_type: ScanType; result: ScanResult; reference: string | null; failure_reason: string | null; scanned_at: string; }
 export interface ScannerSummary { scanner_device_id: number; day: string; success: number; failed: number; entries: number; exits: number; }
+export interface CollegeSlot { slot_id: number; code: string; status: SlotStatus; }
+export interface CollegeFacility { id: number; name: string; address: string; latitude: number | null; longitude: number | null; timezone: string; capacity: number; occupied: number; available: number; last_updated: string; slots: CollegeSlot[]; }
+export interface CollegeProfile { full_name: string; email: string; phone: string | null; registration_number: string | null; vehicle_type: VehicleType | null; }
+export interface CollegeSession { id: number; ticket_id: string; student_name: string; phone?: string | null; vehicle_number: string; space: string; entry_source: string | null; exit_source: string | null; entry_time: string; exit_time: string | null; duration_minutes: number | null; status: string; }
+export interface CollegeAction { session: CollegeSession; facility: CollegeFacility; }
+export interface CollegeQr { entry_path: string; exit_path: string; }

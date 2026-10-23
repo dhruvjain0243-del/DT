@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 
 from .core.config import get_settings
 from .core.logging import configure_logging
-from .routers import auth, availability, facilities, feedback, operations, parking, predictions, reports, slots, users, vehicles
+from .routers import auth, availability, college, facilities, feedback, operations, parking, predictions, reports, slots, users, vehicles
 from .schemas.common import HealthResponse
 
 
@@ -112,5 +112,6 @@ for api_router in (
     operations.router,
     reports.router,
     predictions.router,
+    college.router,
 ):
     app.include_router(api_router)

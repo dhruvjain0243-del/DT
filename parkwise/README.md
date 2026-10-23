@@ -372,3 +372,32 @@ Before a large production rollout, add distributed rate limiting and token revoc
 - Observability with OpenTelemetry traces, metrics, dashboards, and alerting
 - Kubernetes manifests, autoscaling, network policies, and managed secret rotation
 - Branded printable PDF tickets and accessible wayfinding diagrams
+# PARKWISE college parking mode
+
+The active Vite application exposes two authenticated experiences: `/` for students/users and `/admin` for administrators. The college parking API uses the configured facility and its motorcycle zone as the source of truth for the P-01…P-N grid.
+
+## Start locally
+
+From `parkwise`:
+
+```powershell
+..\.venv313\Scripts\python.exe -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
+```
+
+In another terminal, from `parkwise\frontend-web`:
+
+```powershell
+npm.cmd run dev -- --host 127.0.0.1 --port 5173
+```
+
+Apply migrations from `parkwise\backend` with `..\..\.venv313\Scripts\python.exe -m alembic -c alembic.ini upgrade head`.
+
+## College workflow
+
+An administrator configures the college name, address, optional coordinates, timezone, and capacity in the Admin dashboard. Coordinates are optional; when absent the UI explicitly says that the college parking location has not been configured. Capacity changes create virtual labels such as `P-01` and cannot remove occupied spaces.
+
+The Admin dashboard provides intent-only ENTRY and EXIT QR links. A QR contains only a workflow path and facility id; it does not contain a password, personal data, scanner key, or access token. Opening the QR never changes state. The student must authenticate and confirm entry or exit. Successful actions use the existing atomic parking service and record `STUDENT_BUTTON` or `ADMIN_MANUAL` sources in the session.
+
+Provider-dependent email ownership verification and phone OTP require a real configured provider. The application does not return fake OTPs or claim that a message was sent when no provider exists. Keep provider credentials server-side; never put them in Vite variables.
+
+The database remains the live source of truth. Reports can be downloaded by an administrator as CSV or XLSX; the XLSX writer escapes formula-leading values as text. Daily date selection and timezone-aware scheduled exports still require deployment-specific scheduling/configuration.

@@ -38,6 +38,16 @@ class Settings(BaseSettings):
     model_version: str = "random-forest-v1"
     ml_model_sha256: str | None = None
     log_level: str = "INFO"
+    email_smtp_host: str | None = None
+    email_smtp_port: int = 587
+    email_smtp_username: str | None = None
+    email_smtp_password: str | None = None
+    email_from: str | None = None
+    email_verify_base_url: str = "http://localhost:8000/api/auth/verify-email"
+
+    @property
+    def email_provider_configured(self) -> bool:
+        return bool(self.email_smtp_host and self.email_smtp_username and self.email_smtp_password and self.email_from)
 
     @field_validator("cors_origins")
     @classmethod

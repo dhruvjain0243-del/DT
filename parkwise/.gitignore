@@ -7,6 +7,7 @@ htmlcov/
 .env
 *.db
 *.sqlite3
+*.bak
 .streamlit/secrets.toml
 frontend/.streamlit/secrets.toml
 frontend-web/node_modules/

@@ -5,11 +5,12 @@ from html import escape
 from io import BytesIO
 from zipfile import ZIP_DEFLATED, ZipFile
 from collections import Counter, defaultdict
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from io import StringIO
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Response
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import joinedload
 
 from ..dependencies import DbSession, require_roles
@@ -25,7 +26,7 @@ def _sessions_since(db: DbSession, since: datetime) -> list[ParkingSession]:
     return list(
         db.scalars(
             select(ParkingSession)
-            .options(joinedload(ParkingSession.facility), joinedload(ParkingSession.vehicle))
+            .options(joinedload(ParkingSession.facility), joinedload(ParkingSession.vehicle), joinedload(ParkingSession.user), joinedload(ParkingSession.slot))
             .where(ParkingSession.entry_time >= since)
             .order_by(ParkingSession.entry_time.desc())
         )
@@ -107,7 +108,12 @@ def export_csv(db: DbSession, admin: User = AdminUser, days: int = 90) -> Respon
 def _xlsx_bytes(sheets: dict[str, list[list[object]]]) -> bytes:
     """Create a small standards-compliant XLSX without exposing a new runtime dependency."""
     def cell(value: object) -> str:
-        text = escape("" if value is None else str(value))
+        raw = "" if value is None else str(value)
+        # Keep exported values as literal text; spreadsheet engines must not execute
+        # user-controlled values beginning with formula characters.
+        if raw.startswith(("=", "+", "-", "@")):
+            raw = "'" + raw
+        text = escape(raw)
         return f'<c t="inlineStr"><is><t>{text}</t></is></c>'
 
     workbook_sheets = []
@@ -147,12 +153,33 @@ def scanner_summary(db: DbSession, admin: User = AdminUser, days: int = 30) -> l
 
 
 @router.get("/export-xlsx")
-def export_xlsx(db: DbSession, admin: User = AdminUser, days: int = 90) -> Response:
-    since = datetime.now(UTC) - timedelta(days=max(1, min(days, 366)))
-    sessions = _sessions_since(db, since)
-    events = list(db.scalars(select(ScanEvent).where(ScanEvent.scanned_at >= since).order_by(ScanEvent.scanned_at.desc())))
+def export_xlsx(db: DbSession, admin: User = AdminUser, days: int = 90, selected_date: date | None = None) -> Response:
+    days = max(1, min(days, 366))
+    if selected_date:
+        facility = db.scalar(select(ParkingSession.facility).order_by(ParkingSession.facility_id).limit(1))
+        timezone = ZoneInfo(facility.timezone if facility else "Asia/Kolkata")
+        start = datetime.combine(selected_date, time.min, tzinfo=timezone).astimezone(UTC)
+        end = datetime.combine(selected_date + timedelta(days=1), time.min, tzinfo=timezone).astimezone(UTC)
+        sessions = list(db.scalars(select(ParkingSession).options(joinedload(ParkingSession.facility), joinedload(ParkingSession.vehicle), joinedload(ParkingSession.user), joinedload(ParkingSession.slot)).where(or_(and_(ParkingSession.entry_time >= start, ParkingSession.entry_time < end), and_(ParkingSession.exit_time >= start, ParkingSession.exit_time < end))).order_by(ParkingSession.entry_time.desc())))
+    else:
+        sessions = _sessions_since(db, datetime.now(UTC) - timedelta(days=days))
+    event_since = start if selected_date else datetime.now(UTC) - timedelta(days=days)
+    event_end = end if selected_date else None
+    event_query = select(ScanEvent).where(ScanEvent.scanned_at >= event_since)
+    if event_end:
+        event_query = event_query.where(ScanEvent.scanned_at < event_end)
+    events = list(db.scalars(event_query.order_by(ScanEvent.scanned_at.desc())))
+    def row(item: ParkingSession) -> list[object]:
+        return [item.id, item.user.full_name, item.user.phone or "", item.vehicle.registration_number, item.slot.slot_code, item.entry_source or item.entry_method.value, item.exit_source or (item.exit_method.value if item.exit_method else ""), item.entry_time.isoformat(), item.exit_time.isoformat() if item.exit_time else "", item.status.value]
+    started = [item for item in sessions if not selected_date or item.entry_time.date() == selected_date]
+    ended = [item for item in sessions if item.exit_time and (not selected_date or item.exit_time.date() == selected_date)]
+    active = [item for item in sessions if item.status.value == "ACTIVE"]
+    capacity = sum(1 for item in active)
     workbook = _xlsx_bytes({
-        "Sessions": [["ticket_id", "facility", "vehicle", "entry_time", "exit_time", "status"]] + [[item.ticket_id, item.facility.name, item.vehicle.registration_number, item.entry_time.isoformat(), item.exit_time.isoformat() if item.exit_time else "", item.status.value] for item in sessions],
+        "Summary": [["selected_date", "entry_count", "exit_count", "currently_occupied", "currently_available"], [selected_date.isoformat() if selected_date else "rolling", len(started), len(ended), capacity, max(0, (sessions[0].facility.total_capacity if sessions else 0) - capacity)]],
+        "Sessions Started": [["record_id", "student_name", "phone", "vehicle", "space", "entry_source", "exit_source", "entry_time", "exit_time", "status"]] + [row(item) for item in started],
+        "Sessions Ended": [["record_id", "student_name", "phone", "vehicle", "space", "entry_source", "exit_source", "entry_time", "exit_time", "status"]] + [row(item) for item in ended],
+        "Active Sessions": [["record_id", "student_name", "phone", "vehicle", "space", "entry_source", "exit_source", "entry_time", "exit_time", "status"]] + [row(item) for item in active],
         "Scan events": [["scanned_at", "scanner_device_id", "gate_id", "scan_type", "result", "reference", "failure_reason"]] + [[event.scanned_at.isoformat(), event.scanner_device_id or "", event.gate_id, event.scan_type.value, event.result.value, event.reference or "", event.failure_reason or ""] for event in events],
     })
     return Response(workbook, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": 'attachment; filename="parkwise-report.xlsx"'})

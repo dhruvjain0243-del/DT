@@ -61,6 +61,7 @@ class User(Base):
         enum_column(UserRole, "user_role"), default=UserRole.STUDENT, index=True
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     vehicles: Mapped[list[Vehicle]] = relationship(
@@ -93,6 +94,8 @@ class Facility(Base):
     total_capacity: Mapped[int] = mapped_column(Integer)
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    timezone: Mapped[str] = mapped_column(String(64), default="Asia/Kolkata")
+    permitted_email_domains: Mapped[str | None] = mapped_column(Text, nullable=True)
     distance_km: Mapped[float] = mapped_column(Float, default=0.0)
     price_per_hour: Mapped[float] = mapped_column(Float, default=0.0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
@@ -197,6 +200,8 @@ class ParkingSession(Base):
     exit_method: Mapped[EntryMethod | None] = mapped_column(
         enum_column(EntryMethod, "exit_method"), nullable=True
     )
+    entry_source: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    exit_source: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     user: Mapped[User] = relationship(back_populates="parking_sessions")

@@ -1,4 +1,4 @@
-import type { Availability, Facility, Gate, Metrics, Prediction, ScanEvent, Scanner, ScannerSummary, Ticket, Tokens, Vehicle, Zone, Slot, ExitResult, User } from "./types";
+import type { Availability, Facility, Gate, Metrics, Prediction, ScanEvent, Scanner, ScannerSummary, Ticket, Tokens, Vehicle, Zone, Slot, ExitResult, User, CollegeFacility, CollegeProfile, CollegeSession, CollegeAction, CollegeQr } from "./types";
 
 const base = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000").replace(/\/$/, "");
 export class ApiError extends Error { constructor(public status: number, message: string) { super(message); } }
@@ -26,7 +26,7 @@ async function request<T>(path: string, options: RequestInit = {}, retry = true)
     }
     if (!response.ok) {
       let message = `Request failed (${response.status})`;
-      try { const body = await response.json(); message = body?.error?.message || body?.detail || message; } catch { /* safe fallback */ }
+      try { const body = await response.json(); const details = body?.error?.details?.map((item: { field?: string; message?: string }) => `${item.field || "field"}: ${item.message || "invalid value"}`).join("; "); message = details || body?.error?.message || body?.detail || message; } catch { /* safe fallback */ }
       throw new ApiError(response.status, message);
     }
     if (response.status === 204) return undefined as T;
@@ -75,4 +75,15 @@ export const api = {
   scannerScan: (scannerId: number, apiKey: string, body: { scan_type: string; qr_token?: string; vehicle_registration?: string; scan_reference?: string }) => request<Record<string, unknown>>(`/api/operations/scanners/${scannerId}/scan`, { method: "POST", headers: { "X-Scanner-Key": apiKey }, body: JSON.stringify(body) }),
   scannerSummary: (days = 30) => request<ScannerSummary[]>(`/api/reports/scanner-summary?days=${days}`),
   exportXlsx: (days: number) => request<Blob>(`/api/reports/export-xlsx?days=${days}`, { headers: { Accept: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" } }),
+  collegeFacility: () => request<CollegeFacility>("/api/college/facility"),
+  collegeProfile: () => request<CollegeProfile>("/api/college/profile"),
+  updateCollegeProfile: (body: { full_name: string; phone?: string | null; registration_number: string }) => request<CollegeProfile>("/api/college/profile", json("PUT", body)),
+  collegeEntry: () => request<CollegeAction>("/api/college/entry", json("POST", {})),
+  collegeExit: () => request<CollegeAction>("/api/college/exit", json("POST", {})),
+  collegeHistory: () => request<CollegeSession[]>("/api/college/my-sessions"),
+  collegeAdminSessions: () => request<CollegeSession[]>("/api/college/admin/sessions"),
+  collegeConfig: (body: { name: string; address: string; latitude: number | null; longitude: number | null; capacity: number; timezone: string; permitted_email_domains: string[] }) => request<CollegeFacility>("/api/college/admin/config", json("PUT", body)),
+  collegeQr: () => request<CollegeQr>("/api/college/qr"),
+  requestEmailVerification: (email: string) => request<{ message: string }>(`/api/auth/verify-email/request?email=${encodeURIComponent(email)}`, { method: "POST" }),
+  register: (body: { full_name: string; email: string; phone?: string | null; password: string; role: string }) => request<User>("/api/auth/register", json("POST", body)),
 };

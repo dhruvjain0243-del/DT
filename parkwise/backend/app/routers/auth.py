@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import threading
 import time
+import smtplib
+from email.message import EmailMessage
 from collections import defaultdict, deque
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import or_, select
 
-from ..core.security import TokenError, create_token_pair, decode_token, hash_password, verify_password
+from ..core.config import get_settings
+from ..core.security import TokenError, create_email_verification_token, create_token_pair, decode_token, hash_password, verify_password
 from ..dependencies import CurrentUser, DbSession, oauth2_scheme
 from ..models import RevokedToken, User
 from ..schemas.auth import LogoutRequest, RefreshRequest, TokenResponse, UserRead, UserRegister
@@ -54,27 +57,63 @@ def _revoke(db: DbSession, payload: dict) -> None:
 @router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
 def register(data: UserRegister, db: DbSession) -> User:
     email = data.email.lower()
-    duplicate = db.scalar(
-        select(User.id).where(
-            or_(User.email == email, User.college_id == data.college_id)
-            if data.college_id
-            else User.email == email
-        )
-    )
+    duplicate = db.scalar(select(User.id).where(User.email == email))
     if duplicate:
-        raise HTTPException(status_code=409, detail="Email or college ID already exists")
+        raise HTTPException(status_code=409, detail="Email already exists")
     user = User(
         full_name=data.full_name.strip(),
         email=email,
-        college_id=data.college_id.strip() if data.college_id else None,
         phone=data.phone.strip() if data.phone else None,
         password_hash=hash_password(data.password),
         role=data.role,
+        email_verified=False,
     )
     db.add(user)
     db.commit()
     db.refresh(user)
     return user
+
+
+def _send_verification_email(user: User) -> None:
+    settings = get_settings()
+    if not settings.email_provider_configured:
+        raise HTTPException(status_code=503, detail="Email verification is not configured. Set the server SMTP settings first.")
+    token = create_email_verification_token(user.id)
+    message = EmailMessage()
+    message["Subject"] = "Verify your PARKWISE email"
+    message["From"] = settings.email_from
+    message["To"] = user.email
+    message.set_content(f"Verify your PARKWISE account by opening:\n\n{settings.email_verify_base_url}?token={token}\n\nThis link expires in 24 hours.")
+    try:
+        with smtplib.SMTP(settings.email_smtp_host, settings.email_smtp_port, timeout=15) as smtp:
+            smtp.starttls()
+            smtp.login(settings.email_smtp_username, settings.email_smtp_password)
+            smtp.send_message(message)
+    except (OSError, smtplib.SMTPException) as exc:
+        raise HTTPException(status_code=502, detail="The verification email could not be sent by the configured provider") from exc
+
+
+@router.post("/verify-email/request", response_model=MessageResponse)
+def request_email_verification(email: str, db: DbSession) -> MessageResponse:
+    user = db.scalar(select(User).where(User.email == email.lower()))
+    if not user or user.email_verified:
+        return MessageResponse(message="If the account exists and needs verification, a message will be sent.")
+    _send_verification_email(user)
+    return MessageResponse(message="Verification email sent. Check your mailbox before signing in.")
+
+
+@router.get("/verify-email", response_class=Response)
+def verify_email(token: str, db: DbSession) -> Response:
+    try:
+        payload = decode_token(token, "email_verify")
+        user = db.get(User, int(payload["sub"]))
+    except (TokenError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification link") from exc
+    if not user:
+        raise HTTPException(status_code=404, detail="Account not found")
+    user.email_verified = True
+    db.commit()
+    return Response("<h1>PARKWISE email verified</h1><p>You can now return to the application and sign in.</p>", media_type="text/html")
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -94,6 +133,8 @@ def login(
         )
     if not user.is_active:
         raise HTTPException(status_code=403, detail="User account is inactive")
+    if not user.email_verified:
+        raise HTTPException(status_code=403, detail="Verify your email from the mailbox before signing in")
     return _token_response(user)
 
 
