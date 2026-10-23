@@ -3,6 +3,8 @@ from __future__ import annotations
 import threading
 import time
 import smtplib
+import secrets
+import httpx
 from email.message import EmailMessage
 from collections import defaultdict, deque
 from datetime import UTC, datetime
@@ -10,13 +12,13 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy import or_, select
+from sqlalchemy import select
 
 from ..core.config import get_settings
 from ..core.security import TokenError, create_email_verification_token, create_token_pair, decode_token, hash_password, verify_password
 from ..dependencies import CurrentUser, DbSession, oauth2_scheme
-from ..models import RevokedToken, User
-from ..schemas.auth import LogoutRequest, RefreshRequest, TokenResponse, UserRead, UserRegister
+from ..models import RevokedToken, User, UserRole
+from ..schemas.auth import LogoutRequest, RefreshRequest, SupabaseSessionRequest, TokenResponse, UserRead, UserRegister
 from ..schemas.common import MessageResponse
 
 
@@ -72,6 +74,58 @@ def register(data: UserRegister, db: DbSession) -> User:
     db.commit()
     db.refresh(user)
     return user
+
+
+@router.post("/supabase-session", response_model=TokenResponse)
+def create_supabase_session(
+    data: SupabaseSessionRequest,
+    request: Request,
+    token: Annotated[str, Depends(oauth2_scheme)],
+    db: DbSession,
+) -> TokenResponse:
+    """Bridge a verified Supabase Auth session into the existing PARKWISE API session."""
+    settings = get_settings()
+    if not settings.supabase_url or not settings.supabase_publishable_key:
+        raise HTTPException(status_code=503, detail="Supabase authentication is not configured on the server")
+    try:
+        response = httpx.get(
+            f"{settings.supabase_url.rstrip('/')}/auth/v1/user",
+            headers={"apikey": settings.supabase_publishable_key, "Authorization": f"Bearer {token}"},
+            timeout=10,
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=503, detail="Supabase authentication is unavailable") from exc
+    if response.status_code != 200:
+        raise HTTPException(status_code=401, detail="Invalid Supabase session")
+    remote = response.json()
+    if not remote.get("email") or not remote.get("email_confirmed_at"):
+        raise HTTPException(status_code=403, detail="Verify your email before signing in")
+    email = str(remote["email"]).lower()
+    supabase_user_id = str(remote["id"])
+    user = db.scalar(select(User).where(User.supabase_user_id == supabase_user_id))
+    if not user:
+        user = db.scalar(select(User).where(User.email == email))
+    metadata = remote.get("user_metadata") or {}
+    if not user:
+        user = User(
+            full_name=(data.full_name or metadata.get("full_name") or email.split("@", 1)[0]).strip(),
+            email=email,
+            phone=data.phone,
+            password_hash=hash_password(secrets.token_urlsafe(32)),
+            role=UserRole.STUDENT,
+            email_verified=True,
+        )
+        db.add(user)
+        db.flush()
+    user.supabase_user_id = supabase_user_id
+    user.email_verified = True
+    if data.full_name:
+        user.full_name = data.full_name.strip()
+    if data.phone is not None:
+        user.phone = data.phone
+    db.commit()
+    db.refresh(user)
+    return _token_response(user)
 
 
 def _send_verification_email(user: User) -> None:

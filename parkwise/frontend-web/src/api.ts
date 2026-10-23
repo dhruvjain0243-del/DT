@@ -41,6 +41,7 @@ async function request<T>(path: string, options: RequestInit = {}, retry = true)
 const json = (method: string, body: unknown): RequestInit => ({ method, body: JSON.stringify(body) });
 export const api = {
   login: (username: string, password: string) => request<Tokens>("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ username, password }) }),
+  supabaseSession: (accessToken: string, body: { full_name?: string | null; phone?: string | null } = {}) => request<Tokens>("/api/auth/supabase-session", { method: "POST", headers: { Authorization: `Bearer ${accessToken}` }, body: JSON.stringify(body) }),
   logout: () => request<void>("/api/auth/logout", json("POST", { refresh_token: refreshToken })),
   me: () => request<User>("/api/auth/me"),
   facilities: () => request<Facility[]>("/api/facilities"),

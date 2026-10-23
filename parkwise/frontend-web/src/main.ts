@@ -1,6 +1,6 @@
 import "./styles.css";
 import { ApiError, api } from "./api";
-import { currentUser, isAuthenticated, role, signIn, signOut } from "./auth";
+import { bridgeSupabaseSession, currentUser, isAuthenticated, resendSupabaseVerification, role, signIn, signInWithSupabase, signOut, signUpWithSupabase } from "./auth";
 import { canAccess, go, guard, route, visiblePages } from "./router";
 import type { Availability, Facility, Prediction, Vehicle } from "./types";
 
@@ -8,7 +8,7 @@ const app = document.querySelector<HTMLDivElement>("#app")!;
 const esc = (value: unknown) => String(value ?? "—").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[char] || char));
 const fmtDate = (value: unknown) => value ? new Date(String(value)).toLocaleString() : "Not available";
 const fmtMoney = (value: unknown) => typeof value === "number" && value > 0 ? `₹${value.toFixed(0)}/hr` : "Not available";
-const errorText = (error: unknown) => error instanceof ApiError ? error.message : "Something went wrong. Please try again.";
+const errorText = (error: unknown) => error instanceof ApiError ? error.message : error instanceof Error ? error.message : "Something went wrong. Please try again.";
 
 function layout(content: string, active: string) {
   const user = currentUser();
@@ -136,5 +136,42 @@ function bind() {
 
 function loginPage() { app.innerHTML = `<div class="login-shell"><div class="login-card"><div class="brand"><div class="brand-mark">◉</div><div><strong>PARKWISE</strong><small>COLLEGE PARKING</small></div></div><span class="eyebrow">SECURE EMAIL LOGIN</span><h1>Welcome back.</h1><p>Existing users can sign in directly. New users should create an account and verify their email.</p><form id="login-form"><label>Email<input name="email" type="email" autocomplete="username" required placeholder="you@example.com" /></label><label>Password<input name="password" type="password" autocomplete="current-password" required /></label><button class="primary-button" type="submit">Sign in</button><div id="login-message"></div></form><button class="secondary-button" id="show-register" type="button">Sign up for new user</button><div id="register-panel" hidden><form id="register-form"><label>Full name<input name="full_name" required /></label><label>Email<input name="email" type="email" required /></label><label>Password<input name="password" type="password" minlength="8" required /></label><button class="primary-button" type="submit">Create account</button><button class="secondary-button" id="verify-request" type="button">Send verification email</button><div id="register-message"></div></form></div><small class="muted">Only new accounts require mailbox verification. Existing accounts sign in normally.</small></div></div>`; document.querySelector<HTMLFormElement>("#login-form")!.addEventListener("submit", async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget as HTMLFormElement); const message = document.querySelector("#login-message")!; message.innerHTML = `<div class="loading">Signing in…</div>`; try { await signIn(String(form.get("email")), String(form.get("password"))); go("overview"); } catch (error) { message.innerHTML = showError(errorText(error)); } }); document.querySelector<HTMLButtonElement>("#show-register")!.addEventListener("click", () => { const panel = document.querySelector<HTMLElement>("#register-panel")!; panel.hidden = !panel.hidden; }); document.querySelector<HTMLButtonElement>("#verify-request")!.addEventListener("click", async () => { const email = String((document.querySelector<HTMLInputElement>('#register-form input[name="email"]'))?.value || ""); const message = document.querySelector("#register-message")!; if (!email) { message.innerHTML = `<div class="error-state">Enter the new user email first.</div>`; return; } try { const result = await api.requestEmailVerification(email); message.innerHTML = `<div class="success-state">${esc(result.message)}</div>`; } catch (error) { message.innerHTML = showError(errorText(error)); } }); document.querySelector<HTMLFormElement>("#register-form")!.addEventListener("submit", async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget as HTMLFormElement); const message = document.querySelector("#register-message")!; try { await api.register({ full_name: String(form.get("full_name")), email: String(form.get("email")), password: String(form.get("password")), role: "STUDENT" }); const result = await api.requestEmailVerification(String(form.get("email"))); message.innerHTML = `<div class="success-state">Account created. ${esc(result.message)}</div>`; } catch (error) { message.innerHTML = showError(errorText(error)); } }); }
 
-window.addEventListener("popstate", () => { if (!isAuthenticated()) loginPage(); else void renderPage(); });
-if (!isAuthenticated()) loginPage(); else void renderPage();
+function supabaseLoginPage() {
+  app.innerHTML = `<div class="login-shell"><div class="login-card"><div class="brand"><div class="brand-mark">◉</div><div><strong>PARKWISE</strong><small>COLLEGE PARKING</small></div></div><span class="eyebrow">SECURE EMAIL LOGIN</span><h1>Welcome back.</h1><p>Existing users can sign in directly. New users should create an account and verify their email.</p><form id="login-form"><label>Email<input name="email" type="email" autocomplete="username" required placeholder="you@example.com" /></label><label>Password<input name="password" type="password" autocomplete="current-password" required /></label><button class="primary-button" type="submit">Sign in</button><div id="login-message"></div></form><button class="secondary-button" id="show-register" type="button">Sign up for new user</button><div id="register-panel" hidden><form id="register-form"><label>Full name<input name="full_name" required /></label><label>Email<input name="email" type="email" required /></label><label>Password<input name="password" type="password" minlength="8" required /></label><button class="primary-button" type="submit">Create account</button><button class="secondary-button" id="verify-request" type="button">Resend verification email</button><div id="register-message"></div></form></div><small class="muted">New accounts must verify their mailbox before signing in.</small></div></div>`;
+  document.querySelector<HTMLFormElement>("#login-form")!.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget as HTMLFormElement);
+    const message = document.querySelector("#login-message")!;
+    message.innerHTML = `<div class="loading">Signing in…</div>`;
+    try { await signInWithSupabase(String(form.get("email")), String(form.get("password"))); go("overview"); }
+    catch (error) { message.innerHTML = showError(errorText(error)); }
+  });
+  document.querySelector<HTMLButtonElement>("#show-register")!.addEventListener("click", () => { const panel = document.querySelector<HTMLElement>("#register-panel")!; panel.hidden = !panel.hidden; });
+  document.querySelector<HTMLButtonElement>("#verify-request")!.addEventListener("click", async () => {
+    const email = String(document.querySelector<HTMLInputElement>('#register-form input[name="email"]')?.value || "");
+    const message = document.querySelector("#register-message")!;
+    if (!email) { message.innerHTML = `<div class="error-state">Enter the email first.</div>`; return; }
+    try { await resendSupabaseVerification(email); message.innerHTML = `<div class="success-state">Verification email requested. Check your mailbox.</div>`; }
+    catch (error) { message.innerHTML = showError(errorText(error)); }
+  });
+  document.querySelector<HTMLFormElement>("#register-form")!.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget as HTMLFormElement);
+    const message = document.querySelector("#register-message")!;
+    try {
+      const result = await signUpWithSupabase(String(form.get("email")), String(form.get("password")), String(form.get("full_name")));
+      message.innerHTML = `<div class="success-state">${result.session ? "Account created. You can now sign in." : "Account created. Check your email to verify your account before signing in."}</div>`;
+    } catch (error) { message.innerHTML = showError(errorText(error)); }
+  });
+}
+
+window.addEventListener("popstate", () => { if (!isAuthenticated()) supabaseLoginPage(); else void renderPage(); });
+async function bootstrap() {
+  if (location.pathname === "/auth/callback") {
+    try { if (await bridgeSupabaseSession()) go("overview"); else go("login"); }
+    catch { go("login"); }
+    return;
+  }
+  if (!isAuthenticated()) supabaseLoginPage(); else void renderPage();
+}
+void bootstrap();

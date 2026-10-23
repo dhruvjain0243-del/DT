@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     email_smtp_password: str | None = None
     email_from: str | None = None
     email_verify_base_url: str = "http://localhost:8000/api/auth/verify-email"
+    supabase_url: str | None = None
+    supabase_publishable_key: str | None = None
 
     @property
     def email_provider_configured(self) -> bool:

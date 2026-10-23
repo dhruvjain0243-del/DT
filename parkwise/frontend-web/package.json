@@ -11,8 +11,11 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "vite": "^7.1.7",
-    "typescript": "^5.9.2"
+    "@supabase/supabase-js": "^2.118.0",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.7"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "@types/node": "^26.6.5"
+  }
 }

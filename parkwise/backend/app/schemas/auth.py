@@ -74,6 +74,11 @@ class RefreshRequest(BaseModel):
     refresh_token: str = Field(min_length=20)
 
 
+class SupabaseSessionRequest(BaseModel):
+    full_name: str | None = Field(default=None, min_length=2, max_length=120)
+    phone: str | None = Field(default=None, min_length=7, max_length=30)
+
+
 class LogoutRequest(BaseModel):
     refresh_token: str | None = None
 

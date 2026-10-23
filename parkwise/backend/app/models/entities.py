@@ -54,6 +54,7 @@ class User(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     full_name: Mapped[str] = mapped_column(String(120))
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    supabase_user_id: Mapped[str | None] = mapped_column(String(100), unique=True, nullable=True, index=True)
     college_id: Mapped[str | None] = mapped_column(String(80), unique=True, nullable=True)
     phone: Mapped[str | None] = mapped_column(String(30), nullable=True)
     password_hash: Mapped[str] = mapped_column(String(255))
