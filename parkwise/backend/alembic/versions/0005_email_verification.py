@@ -14,7 +14,8 @@ def upgrade() -> None:
     op.add_column("users", sa.Column("email_verified", sa.Boolean(), nullable=True))
     # Existing accounts were created under the previous password-login contract.
     # New registrations default to unverified and must confirm ownership.
-    op.execute("UPDATE users SET email_verified = 1 WHERE email_verified IS NULL")
+    users = sa.table("users", sa.column("email_verified", sa.Boolean()))
+    op.execute(users.update().where(users.c.email_verified.is_(None)).values(email_verified=True))
 
 
 def downgrade() -> None:
