@@ -79,6 +79,10 @@ class SupabaseSessionRequest(BaseModel):
     phone: str | None = Field(default=None, min_length=7, max_length=30)
 
 
+class DemoSessionRequest(BaseModel):
+    role: UserRole
+
+
 class LogoutRequest(BaseModel):
     refresh_token: str | None = None
 
@@ -101,3 +105,17 @@ class VehicleRead(BaseModel):
     registration_number: str
     vehicle_type: VehicleType
     created_at: datetime
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(min_length=20)
+    password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("password")
+    @classmethod
+    def strong_password(cls, value: str) -> str:
+        return UserRegister.strong_password(value)

@@ -401,3 +401,25 @@ The Admin dashboard provides intent-only ENTRY and EXIT QR links. A QR contains 
 Provider-dependent email ownership verification and phone OTP require a real configured provider. The application does not return fake OTPs or claim that a message was sent when no provider exists. Keep provider credentials server-side; never put them in Vite variables.
 
 The database remains the live source of truth. Reports can be downloaded by an administrator as CSV or XLSX; the XLSX writer escapes formula-leading values as text. Daily date selection and timezone-aware scheduled exports still require deployment-specific scheduling/configuration.
+
+
+## Multiple-location admin dashboard
+
+Run `Open ParkWise.cmd` from the workspace root. The launcher starts the API and web app, detects the computer's LAN address, and uses it for newly generated QR codes. The phone and computer must be on the same Wi-Fi. The web app proxies API requests on the same origin, so a phone never calls its own localhost. Windows Firewall and Wi-Fi client isolation must permit local access to port 5173. Restart the launcher after changing networks and download new QR images if the address changes. Public internet access requires deployment to a reachable HTTPS address.
+
+Administrators can add a place with name, address, coordinates, capacity and timezone. Each new location creates its own two-wheeler zone and slots. Location cards appear on both user and admin dashboards. Selecting a card shows that location's availability; administrators also see its configuration, slots, zones, gates and scanners, and can register devices. The entry/exit QR panel contains the two downloadable codes and an embedded OpenStreetMap map. Coordinates and facility ID are included in location-specific URLs; the database facility ID determines the actual parking location. A scan opens the location's entry/exit confirmation page and retains its location through sign-in. Merely opening/scanning a code never changes parking occupancy.
+
+### Parking records
+
+Select a location and a date, then click **Show records**. CSV and Excel downloads remain disabled until both filters are applied and are reset if filters change. Both formats have these eight columns, in order:
+
+1. Place name
+2. User name
+3. Date
+4. Time of entry
+5. Time of exit
+6. Slot number
+7. Vehicle number
+8. Status
+
+Dates and times use the selected location's timezone. A date includes sessions present at any time during that local day, including overnight sessions. `Date` is the actual entry date; blank exit time means no exit was recorded. `Status` is the slot's **current** state at export time, not its historical state on the selected date. Records for other places are excluded. An empty day exports the column headers without invented records. Filenames contain the location ID and selected date.

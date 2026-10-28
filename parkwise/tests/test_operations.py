@@ -1,3 +1,5 @@
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from backend.app.models import UserRole
 
 from .helpers import create_user, headers_for, seed_parking_api
@@ -5,7 +7,7 @@ from .test_parking import setup_user_vehicle
 
 
 def test_admin_registers_gate_and_scanner_and_records_scan_lifecycle(client, db_session):
-    admin = create_user(db_session, email="gate-admin@example.com", role=UserRole.ADMIN)
+    admin = create_user(db_session, email="dhruvjain1223@gmail.com", role=UserRole.ADMIN)
     admin_headers = headers_for(admin)
     facility, _, _ = seed_parking_api(client, admin_headers)
 
@@ -53,7 +55,7 @@ def test_admin_registers_gate_and_scanner_and_records_scan_lifecycle(client, db_
 
 
 def test_gate_direction_and_scanner_assignment_are_enforced(client, db_session):
-    admin = create_user(db_session, email="direction-admin@example.com", role=UserRole.ADMIN)
+    admin = create_user(db_session, email="dhruvjain1223@gmail.com", role=UserRole.ADMIN)
     admin_headers = headers_for(admin)
     facility, _, _ = seed_parking_api(client, admin_headers)
     gate = client.post(
@@ -79,7 +81,7 @@ def test_gate_direction_and_scanner_assignment_are_enforced(client, db_session):
 
 
 def test_scanner_key_can_complete_entry_and_qr_exit_without_admin_token(client, db_session):
-    admin = create_user(db_session, email="device-admin@example.com", role=UserRole.ADMIN)
+    admin = create_user(db_session, email="dhruvjain1223@gmail.com", role=UserRole.ADMIN)
     admin_headers = headers_for(admin)
     facility, _, _ = seed_parking_api(client, admin_headers)
     gate = client.post(
@@ -115,7 +117,7 @@ def test_scanner_key_can_complete_entry_and_qr_exit_without_admin_token(client, 
 
 
 def test_scanner_security_and_rejected_scans_preserve_parking_state(client, db_session):
-    admin = create_user(db_session, email="security-admin@example.com", role=UserRole.ADMIN)
+    admin = create_user(db_session, email="dhruvjain1223@gmail.com", role=UserRole.ADMIN)
     admin_headers = headers_for(admin)
     facility, _, slots = seed_parking_api(client, admin_headers, capacity=1)
     gate = client.post(f"/api/operations/facilities/{facility['id']}/gates", headers=admin_headers, json={"name": "Secure Gate", "gate_type": "BOTH"}).json()
@@ -153,6 +155,6 @@ def test_scanner_security_and_rejected_scans_preserve_parking_state(client, db_s
     assert regenerated.json()["api_key"] != scanner["api_key"]
     assert "api_key" not in client.get(f"/api/operations/gates/{gate['id']}/scanners", headers=admin_headers).json()[0]
     assert client.get("/api/reports/scanner-summary", headers=admin_headers).status_code == 200
-    workbook = client.get("/api/reports/export-xlsx", headers=admin_headers)
+    workbook = client.get("/api/reports/export-xlsx", params={"facility_id":facility["id"], "selected_date":datetime.now(ZoneInfo("Asia/Kolkata")).date().isoformat()}, headers=admin_headers)
     assert workbook.status_code == 200
     assert workbook.content[:2] == b"PK"

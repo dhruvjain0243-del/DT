@@ -1,4 +1,4 @@
-import type { Availability, Facility, Gate, Metrics, Prediction, ScanEvent, Scanner, ScannerSummary, Ticket, Tokens, Vehicle, Zone, Slot, ExitResult, User, CollegeFacility, CollegeProfile, CollegeSession, CollegeAction, CollegeQr } from "./types";
+import type { Availability, Facility, Gate, Metrics, Prediction, ScanEvent, Scanner, ScannerSummary, Ticket, Tokens, Vehicle, Zone, Slot, ExitResult, User, CollegeFacility, CollegeProfile, CollegeSession, CollegeAction, CollegeQr, LocationReport } from "./types";
 
 const base = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000").replace(/\/$/, "");
 export class ApiError extends Error { constructor(public status: number, message: string) { super(message); } }
@@ -32,7 +32,7 @@ async function request<T>(path: string, options: RequestInit = {}, retry = true)
     if (response.status === 204) return undefined as T;
     const type = response.headers.get("content-type") || "";
     if (type.includes("json")) return await response.json() as T;
-    if (type.includes("spreadsheetml") || type.includes("octet-stream")) return await response.blob() as T;
+    if (type.includes("spreadsheetml") || type.includes("octet-stream") || type.startsWith("image/")) return await response.blob() as T;
     return await response.text() as T;
   } catch (error) { if (error instanceof ApiError) throw error; throw new ApiError(0, "The PARKWISE API is unavailable."); }
   finally { window.clearTimeout(timer); }
@@ -40,6 +40,9 @@ async function request<T>(path: string, options: RequestInit = {}, retry = true)
 
 const json = (method: string, body: unknown): RequestInit => ({ method, body: JSON.stringify(body) });
 export const api = {
+  forgotPassword: (email: string) => request<{message: string}>("/api/auth/forgot-password", json("POST", {email})),
+  resetPassword: (token: string, password: string) => request<{message: string}>("/api/auth/reset-password", json("POST", {token, password})),
+  demoSession: (role: "ADMIN" | "STUDENT") => request<Tokens>("/api/auth/demo-session", json("POST", { role })),
   login: (username: string, password: string) => request<Tokens>("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ username, password }) }),
   supabaseSession: (accessToken: string, body: { full_name?: string | null; phone?: string | null } = {}) => request<Tokens>("/api/auth/supabase-session", { method: "POST", headers: { Authorization: `Bearer ${accessToken}` }, body: JSON.stringify(body) }),
   logout: () => request<void>("/api/auth/logout", json("POST", { refresh_token: refreshToken })),
@@ -62,7 +65,7 @@ export const api = {
   dailyReport: (days: number) => request<unknown[]>(`/api/reports/daily?days=${days}`),
   peakReport: (days: number) => request<unknown[]>(`/api/reports/peak-hours?days=${days}`),
   sessionsReport: (days: number) => request<unknown[]>(`/api/reports/sessions?days=${days}`),
-  exportCsv: (days: number) => request<string>(`/api/reports/export-csv?days=${days}`),
+  exportCsv: (_days: number, facilityId?: number, date?: string) => request<string>(`/api/reports/export-csv?facility_id=${facilityId || ""}&selected_date=${date || ""}`),
   feedback: (body: unknown) => request<unknown>("/api/feedback", json("POST", body)),
   users: () => request<User[]>("/api/users"),
   audits: () => request<unknown[]>("/api/audit-logs?limit=50"),
@@ -75,16 +78,20 @@ export const api = {
   regenerateScanner: (scannerId: number) => request<Scanner>(`/api/operations/scanners/${scannerId}/regenerate`, json("POST", {})),
   scannerScan: (scannerId: number, apiKey: string, body: { scan_type: string; qr_token?: string; vehicle_registration?: string; scan_reference?: string }) => request<Record<string, unknown>>(`/api/operations/scanners/${scannerId}/scan`, { method: "POST", headers: { "X-Scanner-Key": apiKey }, body: JSON.stringify(body) }),
   scannerSummary: (days = 30) => request<ScannerSummary[]>(`/api/reports/scanner-summary?days=${days}`),
-  exportXlsx: (days: number) => request<Blob>(`/api/reports/export-xlsx?days=${days}`, { headers: { Accept: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" } }),
-  collegeFacility: () => request<CollegeFacility>("/api/college/facility"),
+  exportXlsx: (_days: number, facilityId?: number, date?: string) => request<Blob>(`/api/reports/export-xlsx?facility_id=${facilityId || ""}&selected_date=${date || ""}`, { headers: { Accept: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" } }),
+  locations: () => request<CollegeFacility[]>("/api/college/locations"),
+  locationReport: (facilityId: number, date: string) => request<LocationReport>(`/api/reports/location-records?facility_id=${facilityId}&selected_date=${date}`),
+  addLocation: (body: unknown) => request<CollegeFacility>("/api/college/admin/locations", json("POST", body)),
+  collegeFacility: (facilityId?: number) => request<CollegeFacility>(`/api/college/facility${facilityId ? `?facility_id=${facilityId}` : ""}`),
   collegeProfile: () => request<CollegeProfile>("/api/college/profile"),
   updateCollegeProfile: (body: { full_name: string; phone?: string | null; registration_number: string }) => request<CollegeProfile>("/api/college/profile", json("PUT", body)),
-  collegeEntry: () => request<CollegeAction>("/api/college/entry", json("POST", {})),
-  collegeExit: () => request<CollegeAction>("/api/college/exit", json("POST", {})),
-  collegeHistory: () => request<CollegeSession[]>("/api/college/my-sessions"),
-  collegeAdminSessions: () => request<CollegeSession[]>("/api/college/admin/sessions"),
-  collegeConfig: (body: { name: string; address: string; latitude: number | null; longitude: number | null; capacity: number; timezone: string; permitted_email_domains: string[] }) => request<CollegeFacility>("/api/college/admin/config", json("PUT", body)),
-  collegeQr: () => request<CollegeQr>("/api/college/qr"),
+  collegeEntry: (facilityId?: number) => request<CollegeAction>(`/api/college/entry${facilityId ? `?facility_id=${facilityId}` : ""}`, json("POST", {})),
+  collegeExit: (facilityId?: number) => request<CollegeAction>(`/api/college/exit${facilityId ? `?facility_id=${facilityId}` : ""}`, json("POST", {})),
+  collegeHistory: (facilityId?: number) => request<CollegeSession[]>(`/api/college/my-sessions${facilityId ? `?facility_id=${facilityId}` : ""}`),
+  collegeAdminSessions: (facilityId?: number) => request<CollegeSession[]>(`/api/college/admin/sessions${facilityId ? `?facility_id=${facilityId}` : ""}`),
+  collegeConfig: (body: { name: string; address: string; latitude: number | null; longitude: number | null; capacity: number; timezone: string; permitted_email_domains: string[] }, facilityId?: number) => request<CollegeFacility>(`/api/college/admin/config${facilityId ? `?facility_id=${facilityId}` : ""}`, json("PUT", body)),
+  collegeQrImage: (direction: "entry" | "exit", facilityId?: number) => request<Blob>(`/api/college/qr/${direction}.png${facilityId ? `?facility_id=${facilityId}` : ""}`),
+  collegeQr: (facilityId?: number) => request<CollegeQr>(`/api/college/qr${facilityId ? `?facility_id=${facilityId}` : ""}`),
   requestEmailVerification: (email: string) => request<{ message: string }>(`/api/auth/verify-email/request?email=${encodeURIComponent(email)}`, { method: "POST" }),
   register: (body: { full_name: string; email: string; phone?: string | null; password: string; role: string }) => request<User>("/api/auth/register", json("POST", body)),
 };

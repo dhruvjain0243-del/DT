@@ -1,10 +1,12 @@
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from backend.app.models import UserRole
 
 from .helpers import create_user, headers_for, seed_parking_api
 
 
 def test_admin_reports_csv_and_prediction_api(client, db_session):
-    admin = create_user(db_session, email="reports-admin@example.com", role=UserRole.ADMIN)
+    admin = create_user(db_session, email="dhruvjain1223@gmail.com", role=UserRole.ADMIN)
     headers = headers_for(admin)
     facility, _, _ = seed_parking_api(client, headers, capacity=2)
     _, student_headers, vehicle = _create_student_vehicle(client, db_session)
@@ -22,10 +24,11 @@ def test_admin_reports_csv_and_prediction_api(client, db_session):
     history = client.get("/api/reports/sessions", headers=headers)
     assert history.status_code == 200
     assert len(history.json()) == 1
-    csv_response = client.get("/api/reports/export-csv", headers=headers)
+    csv_response = client.get("/api/reports/export-csv", params={"facility_id":facility["id"], "selected_date":datetime.now(ZoneInfo("Asia/Kolkata")).date().isoformat()}, headers=headers)
     assert csv_response.status_code == 200
     assert "text/csv" in csv_response.headers["content-type"]
-    assert ticket["ticket_id"] in csv_response.text
+    assert "Place name" in csv_response.text
+    assert vehicle["registration_number"] in csv_response.text
 
     prediction = client.post("/api/predictions/run", headers=headers)
     assert prediction.status_code == 200

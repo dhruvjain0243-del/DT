@@ -9,12 +9,12 @@ from datetime import UTC, date, datetime, time, timedelta
 from io import StringIO
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Response, HTTPException
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import joinedload
 
 from ..dependencies import DbSession, require_roles
-from ..models import ParkingSession, ScanEvent, ScanResult, User, UserRole
+from ..models import Facility, ParkingSlot, ParkingSession, ScanEvent, ScanResult, User, UserRole
 from ..schemas.parking import ParkingSessionRead
 
 
@@ -81,28 +81,46 @@ def historical_sessions(
     )
 
 
+REPORT_COLUMNS = ["Place name", "User name", "Date", "Time of entry", "Time of exit", "Slot number", "Vehicle number", "Status"]
+
+
+def _location_records(db: DbSession, facility_id: int, selected_date: date) -> tuple[Facility, list[list[str]]]:
+    facility = db.get(Facility, facility_id)
+    if not facility or not facility.is_active:
+        raise HTTPException(status_code=404, detail="Parking location not found")
+    timezone = ZoneInfo(facility.timezone)
+    start = datetime.combine(selected_date, time.min, tzinfo=timezone).astimezone(UTC)
+    end = datetime.combine(selected_date + timedelta(days=1), time.min, tzinfo=timezone).astimezone(UTC)
+    # Include sessions present at any point during the selected local calendar day.
+    sessions = db.scalars(select(ParkingSession).options(joinedload(ParkingSession.facility), joinedload(ParkingSession.user), joinedload(ParkingSession.vehicle), joinedload(ParkingSession.slot)).where(ParkingSession.facility_id == facility_id, ParkingSession.status != "CANCELLED", ParkingSession.entry_time < end, or_(ParkingSession.exit_time.is_(None), ParkingSession.exit_time >= start)).order_by(ParkingSession.entry_time))
+    def local(value: datetime) -> datetime:
+        return (value if value.tzinfo else value.replace(tzinfo=UTC)).astimezone(timezone)
+    rows = []
+    for item in sessions:
+        entry = local(item.entry_time)
+        exit = local(item.exit_time) if item.exit_time else None
+        rows.append([facility.name, item.user.full_name, entry.strftime("%Y-%m-%d"), entry.strftime("%H:%M:%S"), exit.strftime("%H:%M:%S") if exit else "", item.slot.slot_code, item.vehicle.registration_number, "Currently occupied" if item.slot.status.value == "OCCUPIED" else "Currently available" if item.slot.status.value == "AVAILABLE" else item.slot.status.value.replace("_", " ").title()])
+    return facility, rows
+
+
+def _safe_cell(value: str) -> str:
+    return "'" + value if value.lstrip().startswith(("=", "+", "-", "@")) else value
+
+
+@router.get("/location-records")
+def location_records(db: DbSession, facility_id: int, selected_date: date, admin: User = AdminUser) -> dict:
+    facility, rows = _location_records(db, facility_id, selected_date)
+    return {"facility_id": facility.id, "place_name": facility.name, "selected_date": selected_date.isoformat(), "timezone": facility.timezone, "columns": REPORT_COLUMNS, "rows": rows}
+
+
 @router.get("/export-csv")
-def export_csv(db: DbSession, admin: User = AdminUser, days: int = 90) -> Response:
-    sessions = _sessions_since(db, datetime.now(UTC) - timedelta(days=max(1, min(days, 366))))
+def export_csv(db: DbSession, facility_id: int, selected_date: date, admin: User = AdminUser) -> Response:
+    facility, rows = _location_records(db, facility_id, selected_date)
     output = StringIO()
     writer = csv.writer(output)
-    writer.writerow(["ticket_id", "facility", "vehicle", "entry_time", "exit_time", "status"])
-    for item in sessions:
-        writer.writerow(
-            [
-                item.ticket_id,
-                item.facility.name,
-                item.vehicle.registration_number,
-                item.entry_time.isoformat(),
-                item.exit_time.isoformat() if item.exit_time else "",
-                item.status.value,
-            ]
-        )
-    return Response(
-        output.getvalue(),
-        media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="parkwise-report.csv"'},
-    )
+    writer.writerow(REPORT_COLUMNS)
+    writer.writerows([[_safe_cell(value) for value in row] for row in rows])
+    return Response("\ufeff" + output.getvalue(), media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="parkwise-location-{facility.id}-{selected_date.isoformat()}.csv"'})
 
 
 def _xlsx_bytes(sheets: dict[str, list[list[object]]]) -> bytes:
@@ -153,33 +171,7 @@ def scanner_summary(db: DbSession, admin: User = AdminUser, days: int = 30) -> l
 
 
 @router.get("/export-xlsx")
-def export_xlsx(db: DbSession, admin: User = AdminUser, days: int = 90, selected_date: date | None = None) -> Response:
-    days = max(1, min(days, 366))
-    if selected_date:
-        facility = db.scalar(select(ParkingSession.facility).order_by(ParkingSession.facility_id).limit(1))
-        timezone = ZoneInfo(facility.timezone if facility else "Asia/Kolkata")
-        start = datetime.combine(selected_date, time.min, tzinfo=timezone).astimezone(UTC)
-        end = datetime.combine(selected_date + timedelta(days=1), time.min, tzinfo=timezone).astimezone(UTC)
-        sessions = list(db.scalars(select(ParkingSession).options(joinedload(ParkingSession.facility), joinedload(ParkingSession.vehicle), joinedload(ParkingSession.user), joinedload(ParkingSession.slot)).where(or_(and_(ParkingSession.entry_time >= start, ParkingSession.entry_time < end), and_(ParkingSession.exit_time >= start, ParkingSession.exit_time < end))).order_by(ParkingSession.entry_time.desc())))
-    else:
-        sessions = _sessions_since(db, datetime.now(UTC) - timedelta(days=days))
-    event_since = start if selected_date else datetime.now(UTC) - timedelta(days=days)
-    event_end = end if selected_date else None
-    event_query = select(ScanEvent).where(ScanEvent.scanned_at >= event_since)
-    if event_end:
-        event_query = event_query.where(ScanEvent.scanned_at < event_end)
-    events = list(db.scalars(event_query.order_by(ScanEvent.scanned_at.desc())))
-    def row(item: ParkingSession) -> list[object]:
-        return [item.id, item.user.full_name, item.user.phone or "", item.vehicle.registration_number, item.slot.slot_code, item.entry_source or item.entry_method.value, item.exit_source or (item.exit_method.value if item.exit_method else ""), item.entry_time.isoformat(), item.exit_time.isoformat() if item.exit_time else "", item.status.value]
-    started = [item for item in sessions if not selected_date or item.entry_time.date() == selected_date]
-    ended = [item for item in sessions if item.exit_time and (not selected_date or item.exit_time.date() == selected_date)]
-    active = [item for item in sessions if item.status.value == "ACTIVE"]
-    capacity = sum(1 for item in active)
-    workbook = _xlsx_bytes({
-        "Summary": [["selected_date", "entry_count", "exit_count", "currently_occupied", "currently_available"], [selected_date.isoformat() if selected_date else "rolling", len(started), len(ended), capacity, max(0, (sessions[0].facility.total_capacity if sessions else 0) - capacity)]],
-        "Sessions Started": [["record_id", "student_name", "phone", "vehicle", "space", "entry_source", "exit_source", "entry_time", "exit_time", "status"]] + [row(item) for item in started],
-        "Sessions Ended": [["record_id", "student_name", "phone", "vehicle", "space", "entry_source", "exit_source", "entry_time", "exit_time", "status"]] + [row(item) for item in ended],
-        "Active Sessions": [["record_id", "student_name", "phone", "vehicle", "space", "entry_source", "exit_source", "entry_time", "exit_time", "status"]] + [row(item) for item in active],
-        "Scan events": [["scanned_at", "scanner_device_id", "gate_id", "scan_type", "result", "reference", "failure_reason"]] + [[event.scanned_at.isoformat(), event.scanner_device_id or "", event.gate_id, event.scan_type.value, event.result.value, event.reference or "", event.failure_reason or ""] for event in events],
-    })
-    return Response(workbook, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": 'attachment; filename="parkwise-report.xlsx"'})
+def export_xlsx(db: DbSession, facility_id: int, selected_date: date, admin: User = AdminUser) -> Response:
+    facility, rows = _location_records(db, facility_id, selected_date)
+    workbook = _xlsx_bytes({"Parking records": [REPORT_COLUMNS] + rows})
+    return Response(workbook, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f'attachment; filename="parkwise-location-{facility.id}-{selected_date.isoformat()}.xlsx"'})

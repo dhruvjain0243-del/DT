@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
+from datetime import timedelta
+import jwt
+from urllib.parse import urlencode
 import threading
 import time
 import smtplib
@@ -12,15 +17,18 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy import select
+from sqlalchemy import select, func, update
+from sqlalchemy.exc import IntegrityError
 
 from ..core.config import get_settings
 from ..core.security import TokenError, create_email_verification_token, create_token_pair, decode_token, hash_password, verify_password
 from ..dependencies import CurrentUser, DbSession, oauth2_scheme
 from ..models import RevokedToken, User, UserRole
-from ..schemas.auth import LogoutRequest, RefreshRequest, SupabaseSessionRequest, TokenResponse, UserRead, UserRegister
+from ..schemas.auth import ForgotPasswordRequest, ResetPasswordRequest, DemoSessionRequest, LogoutRequest, RefreshRequest, SupabaseSessionRequest, TokenResponse, UserRead, UserRegister
 from ..schemas.common import MessageResponse
 
+
+ADMIN_EMAIL = "dhruvjain1223@gmail.com"
 
 router = APIRouter(prefix="/api/auth", tags=["authentication"])
 _attempts: dict[str, deque[float]] = defaultdict(deque)
@@ -39,6 +47,8 @@ def _check_login_rate_limit(client_key: str, limit: int = 10, window_seconds: in
 
 
 def _token_response(user: User) -> TokenResponse:
+    if user.role == UserRole.ADMIN and user.email.lower() != ADMIN_EMAIL:
+        raise HTTPException(status_code=403, detail="This account is not the designated administrator")
     pair = create_token_pair(user.id, user.role.value)
     return TokenResponse(
         access_token=pair.access_token,
@@ -58,8 +68,10 @@ def _revoke(db: DbSession, payload: dict) -> None:
 
 @router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
 def register(data: UserRegister, db: DbSession) -> User:
-    email = data.email.lower()
-    duplicate = db.scalar(select(User.id).where(User.email == email))
+    email = str(data.email).strip().lower()
+    if email == ADMIN_EMAIL:
+        raise HTTPException(status_code=409, detail="This email is reserved for the administrator. Please sign in.")
+    duplicate = db.scalar(select(User.id).where(func.lower(User.email) == email))
     if duplicate:
         raise HTTPException(status_code=409, detail="Email already exists")
     user = User(
@@ -68,10 +80,14 @@ def register(data: UserRegister, db: DbSession) -> User:
         phone=data.phone.strip() if data.phone else None,
         password_hash=hash_password(data.password),
         role=data.role,
-        email_verified=False,
+        email_verified=True,
     )
     db.add(user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Email already exists. Please sign in.")
     db.refresh(user)
     return user
 
@@ -128,6 +144,11 @@ def create_supabase_session(
     return _token_response(user)
 
 
+@router.post("/demo-session", response_model=TokenResponse)
+def create_demo_session(data: DemoSessionRequest, db: DbSession) -> TokenResponse:
+    raise HTTPException(status_code=404, detail="Demo access is disabled. Please sign in.")
+
+
 def _send_verification_email(user: User) -> None:
     settings = get_settings()
     if not settings.email_provider_configured:
@@ -178,7 +199,7 @@ def login(
 ) -> TokenResponse:
     client_key = request.client.host if request.client else "unknown"
     _check_login_rate_limit(client_key)
-    user = db.scalar(select(User).where(User.email == form.username.lower()))
+    user = db.scalar(select(User).where(func.lower(User.email) == form.username.strip().lower()))
     if not user or not verify_password(form.password, user.password_hash):
         raise HTTPException(
             status_code=401,
@@ -187,8 +208,6 @@ def login(
         )
     if not user.is_active:
         raise HTTPException(status_code=403, detail="User account is inactive")
-    if not user.email_verified:
-        raise HTTPException(status_code=403, detail="Verify your email from the mailbox before signing in")
     return _token_response(user)
 
 
@@ -232,3 +251,46 @@ def logout(
         pass
     db.commit()
     return MessageResponse(message="Logged out successfully")
+
+
+@router.post("/forgot-password", response_model=MessageResponse)
+def forgot_password(data: ForgotPasswordRequest, request: Request, db: DbSession) -> MessageResponse:
+    _check_login_rate_limit("reset:" + (request.client.host if request.client else "unknown"), limit=5)
+    settings = get_settings()
+    if not settings.email_provider_configured:
+        raise HTTPException(status_code=503, detail="Password reset emails are not configured yet. Contact the administrator.")
+    user = db.scalar(select(User).where(func.lower(User.email) == str(data.email).lower(), User.is_active.is_(True)))
+    if user:
+        now = datetime.now(UTC)
+        token = jwt.encode({"sub": str(user.id), "type": "password_reset", "jti": secrets.token_hex(16), "iat": now, "exp": now + timedelta(minutes=15), "fingerprint": hashlib.sha256(user.password_hash.encode()).hexdigest()}, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+        message = EmailMessage()
+        message["Subject"] = "Reset your PARKWISE password"
+        message["From"] = settings.email_from
+        message["To"] = user.email
+        link = settings.password_reset_url + "#" + urlencode({"token": token})
+        message.set_content(f"Reset your password using this private link (expires in 15 minutes):\n\n{link}\n\nIf you did not request this, ignore this email.")
+        try:
+            with smtplib.SMTP(settings.email_smtp_host, settings.email_smtp_port, timeout=15) as smtp:
+                smtp.starttls()
+                smtp.login(settings.email_smtp_username, settings.email_smtp_password)
+                smtp.send_message(message)
+        except (OSError, smtplib.SMTPException) as exc:
+            raise HTTPException(status_code=503, detail="Password reset email service is unavailable. Try again later.") from exc
+    return MessageResponse(message="If this email has an active account, a password reset link has been sent. Check your inbox and spam folder.")
+
+
+@router.post("/reset-password", response_model=MessageResponse)
+def reset_password(data: ResetPasswordRequest, db: DbSession) -> MessageResponse:
+    try:
+        payload = decode_token(data.token, "password_reset")
+        user = db.get(User, int(payload["sub"]))
+        if not user or not user.is_active or not hmac.compare_digest(str(payload.get("fingerprint", "")), hashlib.sha256(user.password_hash.encode()).hexdigest()):
+            raise ValueError("Invalid reset")
+    except (TokenError, KeyError, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail="This reset link is invalid, expired, or already used. Request a new link.") from exc
+    result = db.execute(update(User).where(User.id == user.id, User.password_hash == user.password_hash).values(password_hash=hash_password(data.password)))
+    if result.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="This reset link has already been used.")
+    db.commit()
+    return MessageResponse(message="Password updated. Sign in with your new password.")

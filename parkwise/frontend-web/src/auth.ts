@@ -6,6 +6,7 @@ export function currentUser(): User | null { const value = sessionStorage.getIte
 export function isAuthenticated() { return Boolean(authToken() && currentUser()); }
 export function role(): Role | null { return currentUser()?.role || null; }
 export function setSession(tokens: Tokens) { saveTokens(tokens); sessionStorage.setItem("parkwise_user", JSON.stringify(tokens.user)); }
+export async function signInDemo(role: "ADMIN" | "STUDENT") { const tokens = await api.demoSession(role); setSession(tokens); }
 export async function signIn(username: string, password: string) { const tokens = await api.login(username, password); setSession(tokens); }
 export async function signInWithSupabase(email: string, password: string) {
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
@@ -33,4 +34,4 @@ export async function resendSupabaseVerification(email: string) {
   const { error } = await supabase.auth.resend({ type: "signup", email, options: { emailRedirectTo: `${window.location.origin}/auth/callback` } });
   if (error) throw new Error(error.message);
 }
-export async function signOut() { try { if (authToken()) await api.logout(); } catch { /* local session still clears */ } await supabase.auth.signOut(); clearTokens(); sessionStorage.removeItem("parkwise_user"); }
+export async function signOut() { try { if (authToken()) await api.logout(); } catch { /* local session still clears */ } clearTokens(); sessionStorage.removeItem("parkwise_user"); }

@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = Field(default=30, ge=5, le=1440)
     refresh_token_expire_days: int = Field(default=7, ge=1, le=90)
     qr_token_expire_days: int = Field(default=30, ge=1, le=365)
+    frontend_base_url: str = "http://127.0.0.1:5173"
     api_base_url: str = "http://localhost:8000"
     cors_origins: str = "http://localhost:8501,http://localhost:5173,http://127.0.0.1:5173"
     model_path: Path = PROJECT_ROOT / "ml" / "artifacts" / "parking_model.pkl"
@@ -46,6 +47,8 @@ class Settings(BaseSettings):
     email_verify_base_url: str = "http://localhost:8000/api/auth/verify-email"
     supabase_url: str | None = None
     supabase_publishable_key: str | None = None
+    password_reset_url: str = "http://127.0.0.1:5173/reset-password"
+    demo_mode: bool = False
 
     @property
     def email_provider_configured(self) -> bool:

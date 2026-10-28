@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..models.enums import ParkingSessionStatus, VehicleType
 
@@ -15,6 +16,16 @@ class CollegeConfigUpdate(BaseModel):
     capacity: int = Field(gt=0, le=5000)
     timezone: str = Field(default="Asia/Kolkata", min_length=1, max_length=64)
     permitted_email_domains: list[str] = Field(default_factory=list, max_length=20)
+
+
+    @field_validator("timezone")
+    @classmethod
+    def valid_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError("Enter a valid timezone, for example Asia/Kolkata") from exc
+        return value
 
 
 class CollegeProfileUpdate(BaseModel):
@@ -34,6 +45,7 @@ class CollegeProfileRead(BaseModel):
 
 
 class CollegeSlotRead(BaseModel):
+    vehicle_number: str | None = None
     slot_id: int
     code: str
     status: str
@@ -54,6 +66,8 @@ class CollegeFacilityRead(BaseModel):
 
 
 class CollegeSessionRead(BaseModel):
+    facility_id: int
+    place_name: str
     id: int
     ticket_id: str
     student_name: str

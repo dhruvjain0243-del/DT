@@ -21,3 +21,7 @@ htmlcov/
 # Operating System Files
 .DS_Store
 Thumbs.db
+
+# Local operational backups and logs
+outputs/*.sqlite
+outputs/*.log

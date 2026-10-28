@@ -6,8 +6,10 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
+from ..core.config import get_settings
 from ..dependencies import CurrentUser, DbSession, require_roles
 from ..models import (
     EntryMethod,
@@ -44,41 +46,43 @@ router = APIRouter(prefix="/api/college", tags=["college parking"])
 AdminUser = Depends(require_roles(UserRole.ADMIN))
 
 
-def _facility(db: DbSession, admin: bool = False) -> Facility:
-    facility = db.scalar(
-        select(Facility)
-        .join(ParkingZone, ParkingZone.facility_id == Facility.id)
-        .where(Facility.is_active.is_(True), ParkingZone.vehicle_type == VehicleType.MOTORCYCLE, ParkingZone.is_active.is_(True))
-        .order_by(Facility.id.desc())
-    )
+def _facility(db: DbSession, facility_id: int | None = None) -> Facility:
+    query = select(Facility).where(Facility.is_active.is_(True))
+    if facility_id is not None:
+        query = query.where(Facility.id == facility_id)
+    facility = db.scalar(query.order_by(Facility.id.desc()))
     if not facility:
-        raise HTTPException(status_code=404, detail="College parking location has not been configured")
+        raise HTTPException(status_code=404, detail="Parking location not found")
     return facility
 
 
-def _zone(db: DbSession, facility: Facility) -> ParkingZone:
+def _zone(db: DbSession, facility: Facility, vehicle_type: VehicleType | None = None) -> ParkingZone:
     zone = db.scalar(
         select(ParkingZone).where(
             ParkingZone.facility_id == facility.id,
-            ParkingZone.vehicle_type == VehicleType.MOTORCYCLE,
+            ParkingZone.vehicle_type == vehicle_type if vehicle_type else True,
             ParkingZone.is_active.is_(True),
         ).order_by(ParkingZone.id)
     )
     if not zone:
-        raise HTTPException(status_code=409, detail="Two-wheeler parking zone is not configured")
+        raise HTTPException(status_code=409, detail="A compatible parking zone is not configured")
     return zone
 
 
 def _facility_read(db: DbSession, facility: Facility) -> CollegeFacilityRead:
-    zone = _zone(db, facility)
-    slots = list(db.scalars(select(ParkingSlot).where(ParkingSlot.zone_id == zone.id, ParkingSlot.is_active.is_(True)).order_by(ParkingSlot.slot_code)))
+    slots = list(db.scalars(select(ParkingSlot).join(ParkingZone).where(ParkingZone.facility_id == facility.id, ParkingZone.is_active.is_(True), ParkingSlot.is_active.is_(True)).order_by(ParkingZone.name, ParkingSlot.id)))
+    parked_vehicles = dict(db.execute(
+        select(ParkingSession.slot_id, Vehicle.registration_number)
+        .join(Vehicle, Vehicle.id == ParkingSession.vehicle_id)
+        .where(ParkingSession.facility_id == facility.id, ParkingSession.status == ParkingSessionStatus.ACTIVE)
+    ).all())
     occupied = sum(slot.status == SlotStatus.OCCUPIED for slot in slots)
     return CollegeFacilityRead(
         id=facility.id, name=facility.name, address=facility.address,
         latitude=facility.latitude, longitude=facility.longitude, timezone=facility.timezone,
-        capacity=len(slots), occupied=occupied, available=max(0, len(slots) - occupied),
+        capacity=len(slots), occupied=occupied, available=sum(slot.status == SlotStatus.AVAILABLE for slot in slots),
         last_updated=datetime.now(UTC),
-        slots=[CollegeSlotRead(slot_id=s.id, code=s.slot_code, status=s.status.value) for s in slots],
+        slots=[CollegeSlotRead(slot_id=s.id, code=s.slot_code, status=s.status.value, vehicle_number=parked_vehicles.get(s.id) if s.status == SlotStatus.OCCUPIED else None) for s in slots],
     )
 
 
@@ -91,7 +95,7 @@ def _session_read(session: ParkingSession, include_private: bool = True) -> Coll
         entry = session.entry_time if session.entry_time.tzinfo else session.entry_time.replace(tzinfo=UTC)
         duration = max(0, int((end - entry).total_seconds() // 60))
     return CollegeSessionRead(
-        id=session.id, ticket_id=session.ticket_id, student_name=session.user.full_name,
+        id=session.id, ticket_id=session.ticket_id, facility_id=session.facility_id, place_name=session.facility.name, student_name=session.user.full_name,
         phone=session.user.phone if include_private else None,
         vehicle_number=session.vehicle.registration_number, space=session.slot.slot_code,
         entry_source=session.entry_source, exit_source=session.exit_source,
@@ -101,8 +105,32 @@ def _session_read(session: ParkingSession, include_private: bool = True) -> Coll
 
 
 @router.get("/facility", response_model=CollegeFacilityRead)
-def facility(db: DbSession, user: CurrentUser) -> CollegeFacilityRead:
-    return _facility_read(db, _facility(db))
+def facility(db: DbSession, user: CurrentUser, facility_id: int | None = None) -> CollegeFacilityRead:
+    return _facility_read(db, _facility(db, facility_id))
+
+
+@router.get("/locations", response_model=list[CollegeFacilityRead])
+def locations(db: DbSession, user: CurrentUser) -> list[CollegeFacilityRead]:
+    return [_facility_read(db, f) for f in db.scalars(select(Facility).where(Facility.is_active.is_(True)).order_by(Facility.name))]
+
+
+@router.post("/admin/locations", response_model=CollegeFacilityRead, status_code=201)
+def add_location(data: CollegeConfigUpdate, db: DbSession, admin: User = AdminUser) -> CollegeFacilityRead:
+    facility = Facility(name=data.name.strip(), address=data.address.strip(), latitude=data.latitude, longitude=data.longitude, total_capacity=data.capacity, timezone=data.timezone, is_active=True)
+    db.add(facility)
+    try:
+        db.flush()
+        zone = ParkingZone(facility_id=facility.id, name="Main parking", vehicle_type=VehicleType.MOTORCYCLE, capacity=data.capacity, is_active=True)
+        db.add(zone)
+        db.flush()
+        for index in range(data.capacity):
+            db.add(ParkingSlot(zone_id=zone.id, row_label="P", slot_code=f"P-{index+1:03d}", status=SlotStatus.AVAILABLE, is_active=True))
+        record_audit(db, actor_user_id=admin.id, action="CREATE", entity_type="parking_location", entity_id=facility.id)
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="A location with this name already exists") from exc
+    return _facility_read(db, facility)
 
 
 @router.get("/profile", response_model=CollegeProfileRead)
@@ -136,12 +164,12 @@ def update_profile(data: CollegeProfileUpdate, db: DbSession, user: CurrentUser)
 
 
 @router.post("/entry", response_model=CollegeActionResponse, status_code=201)
-def entry(db: DbSession, user: CurrentUser) -> CollegeActionResponse:
-    facility = _facility(db)
+def entry(db: DbSession, user: CurrentUser, facility_id: int | None = None) -> CollegeActionResponse:
+    facility = _facility(db, facility_id)
     vehicle = db.scalar(select(Vehicle).where(Vehicle.user_id == user.id).order_by(Vehicle.id))
     if not vehicle or vehicle.vehicle_type != VehicleType.MOTORCYCLE:
         raise HTTPException(status_code=400, detail="Complete a two-wheeler profile before parking")
-    zone = _zone(db, facility)
+    zone = _zone(db, facility, vehicle.vehicle_type)
     session = create_entry(db, ParkingEntryRequest(vehicle_id=vehicle.id, facility_id=facility.id, zone_id=zone.id, entry_method=EntryMethod.SELF_SERVICE), user)
     session.entry_source = "STUDENT_BUTTON"
     record_audit(db, actor_user_id=user.id, action="COLLEGE_ENTRY", entity_type="parking_session", entity_id=session.id, details={"source": "STUDENT_BUTTON"})
@@ -151,9 +179,9 @@ def entry(db: DbSession, user: CurrentUser) -> CollegeActionResponse:
 
 
 @router.post("/exit", response_model=CollegeActionResponse)
-def exit_parking(db: DbSession, user: CurrentUser) -> CollegeActionResponse:
-    facility = _facility(db)
-    session = db.scalar(select(ParkingSession).options(joinedload(ParkingSession.user), joinedload(ParkingSession.vehicle), joinedload(ParkingSession.slot), joinedload(ParkingSession.zone), joinedload(ParkingSession.facility)).where(ParkingSession.user_id == user.id, ParkingSession.status == ParkingSessionStatus.ACTIVE).with_for_update())
+def exit_parking(db: DbSession, user: CurrentUser, facility_id: int | None = None) -> CollegeActionResponse:
+    facility = _facility(db, facility_id)
+    session = db.scalar(select(ParkingSession).options(joinedload(ParkingSession.user), joinedload(ParkingSession.vehicle), joinedload(ParkingSession.slot), joinedload(ParkingSession.zone), joinedload(ParkingSession.facility)).where(ParkingSession.facility_id == facility.id, ParkingSession.user_id == user.id, ParkingSession.status == ParkingSessionStatus.ACTIVE).with_for_update())
     if not session:
         raise HTTPException(status_code=404, detail="No active parking session")
     close_session(db, ticket_id=session.ticket_id, requester=user, method=EntryMethod.MANUAL)
@@ -165,14 +193,14 @@ def exit_parking(db: DbSession, user: CurrentUser) -> CollegeActionResponse:
 
 
 @router.get("/my-sessions", response_model=list[CollegeSessionRead])
-def my_sessions(db: DbSession, user: CurrentUser) -> list[CollegeSessionRead]:
-    sessions = db.scalars(select(ParkingSession).options(joinedload(ParkingSession.user), joinedload(ParkingSession.vehicle), joinedload(ParkingSession.slot)).where(ParkingSession.user_id == user.id).order_by(ParkingSession.entry_time.desc()).limit(50))
+def my_sessions(db: DbSession, user: CurrentUser, facility_id: int | None = None) -> list[CollegeSessionRead]:
+    sessions = db.scalars(select(ParkingSession).options(joinedload(ParkingSession.user), joinedload(ParkingSession.vehicle), joinedload(ParkingSession.slot)).where(ParkingSession.user_id == user.id, ParkingSession.facility_id == facility_id if facility_id else True).order_by(ParkingSession.entry_time.desc()).limit(50))
     return [_session_read(item, include_private=False) for item in sessions]
 
 
 @router.get("/admin/sessions", response_model=list[CollegeSessionRead])
-def admin_sessions(db: DbSession, admin: User = AdminUser) -> list[CollegeSessionRead]:
-    sessions = db.scalars(select(ParkingSession).options(joinedload(ParkingSession.user), joinedload(ParkingSession.vehicle), joinedload(ParkingSession.slot)).order_by(ParkingSession.entry_time.desc()).limit(500))
+def admin_sessions(db: DbSession, admin: User = AdminUser, facility_id: int | None = None) -> list[CollegeSessionRead]:
+    sessions = db.scalars(select(ParkingSession).options(joinedload(ParkingSession.user), joinedload(ParkingSession.vehicle), joinedload(ParkingSession.slot)).where(ParkingSession.facility_id == facility_id if facility_id else True).order_by(ParkingSession.entry_time.desc()).limit(500))
     return [_session_read(item) for item in sessions]
 
 
@@ -204,41 +232,49 @@ def manual_exit(data: AdminManualExit, db: DbSession, admin: User = AdminUser) -
 
 
 @router.put("/admin/config", response_model=CollegeFacilityRead)
-def update_config(data: CollegeConfigUpdate, db: DbSession, admin: User = AdminUser) -> CollegeFacilityRead:
-    facility = _facility(db)
-    zone = _zone(db, facility)
-    occupied = int(db.scalar(select(func.count(ParkingSlot.id)).where(ParkingSlot.zone_id == zone.id, ParkingSlot.status == SlotStatus.OCCUPIED)) or 0)
-    if data.capacity < occupied:
-        raise HTTPException(status_code=400, detail="Capacity cannot be reduced below current occupancy")
+def update_config(data: CollegeConfigUpdate, db: DbSession, admin: User = AdminUser, facility_id: int | None = None) -> CollegeFacilityRead:
+    facility = _facility(db, facility_id)
+    zones = list(db.scalars(select(ParkingZone).where(ParkingZone.facility_id == facility.id, ParkingZone.is_active.is_(True))))
+    if len(zones) != 1:
+        raise HTTPException(status_code=409, detail="Manage capacities for multi-zone locations in zone management")
+    zone = zones[0]
     slots = list(db.scalars(select(ParkingSlot).where(ParkingSlot.zone_id == zone.id).order_by(ParkingSlot.id)))
+    target_slots = slots[:data.capacity]
+    removed = slots[data.capacity:]
+    if any(slot.status == SlotStatus.OCCUPIED for slot in removed):
+        raise HTTPException(status_code=409, detail="Cannot remove occupied slots. Free them first.")
+    for slot in target_slots:
+        slot.is_active = True
+    for slot in removed:
+        slot.is_active = False
     for index in range(len(slots), data.capacity):
-        db.add(ParkingSlot(zone_id=zone.id, row_label="P", slot_code=f"P-{index + 1:02d}", status=SlotStatus.AVAILABLE, is_active=True))
-    if data.capacity < len(slots):
-        for slot in slots[data.capacity:]:
-            if slot.status == SlotStatus.OCCUPIED:
-                raise HTTPException(status_code=400, detail="Capacity cannot remove an occupied space")
-            slot.is_active = False
-    facility.name, facility.address = data.name, data.address
+        db.add(ParkingSlot(zone_id=zone.id, row_label="P", slot_code=f"P-{index+1:03d}", status=SlotStatus.AVAILABLE, is_active=True))
+    facility.name, facility.address = data.name.strip(), data.address.strip()
     facility.latitude, facility.longitude = data.latitude, data.longitude
     facility.total_capacity, facility.timezone = data.capacity, data.timezone
     facility.permitted_email_domains = ",".join(domain.strip().lower() for domain in data.permitted_email_domains if domain.strip()) or None
     zone.capacity = data.capacity
-    record_audit(db, actor_user_id=admin.id, action="UPDATE", entity_type="college_facility", entity_id=facility.id)
-    db.commit()
+    record_audit(db, actor_user_id=admin.id, action="UPDATE", entity_type="parking_location", entity_id=facility.id)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="A location with this name already exists") from exc
     return _facility_read(db, facility)
 
 
 @router.get("/qr", response_model=CollegeQrRead)
-def qr_links(db: DbSession, admin: User = AdminUser) -> CollegeQrRead:
-    facility = _facility(db)
-    query = urlencode({"facility_id": facility.id})
-    return CollegeQrRead(entry_path=f"/?flow=entry&{query}", exit_path=f"/?flow=exit&{query}")
+def qr_links(db: DbSession, admin: User = AdminUser, facility_id: int | None = None) -> CollegeQrRead:
+    facility = _facility(db, facility_id)
+    query = urlencode({"facility_id": facility.id, "latitude": facility.latitude if facility.latitude is not None else "", "longitude": facility.longitude if facility.longitude is not None else ""})
+    base = get_settings().frontend_base_url.rstrip("/")
+    return CollegeQrRead(entry_path=f"{base}/user?flow=entry&{query}", exit_path=f"{base}/user?flow=exit&{query}")
 
 
 @router.get("/qr/{direction}.png")
-def qr_image(direction: str, db: DbSession, admin: User = AdminUser) -> Response:
-    links = qr_links(db, admin)
+def qr_image(direction: str, db: DbSession, admin: User = AdminUser, facility_id: int | None = None) -> Response:
+    links = qr_links(db, admin, facility_id)
     path = links.entry_path if direction == "entry" else links.exit_path if direction == "exit" else None
     if not path:
         raise HTTPException(status_code=404, detail="QR direction not found")
-    return Response(qr_png_bytes(path), media_type="image/png", headers={"Content-Disposition": f"attachment; filename=college-{direction}.png"})
+    return Response(qr_png_bytes(path), media_type="image/png", headers={"Content-Disposition": f"attachment; filename=location-{facility_id or 'default'}-{direction}.png"})

@@ -43,6 +43,8 @@ def get_current_user(
     user = db.get(User, payload["user_id"])
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="User is inactive or no longer exists")
+    if user.role == UserRole.ADMIN and user.email.lower() != "dhruvjain1223@gmail.com":
+        raise HTTPException(status_code=403, detail="This account is not the designated administrator")
     if user.role.value != payload.get("role"):
         raise HTTPException(status_code=401, detail="Token role is stale; sign in again")
     return user
