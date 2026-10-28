@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+*.db
+*.sqlite
+*.sqlite3
+*.bak
+*.log
+__pycache__/
+.pytest_cache/
+tests/
+frontend/
+frontend-web/

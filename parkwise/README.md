@@ -423,3 +423,24 @@ Select a location and a date, then click **Show records**. CSV and Excel downloa
 8. Status
 
 Dates and times use the selected location's timezone. A date includes sessions present at any time during that local day, including overnight sessions. `Date` is the actual entry date; blank exit time means no exit was recorded. `Status` is the slot's **current** state at export time, not its historical state on the selected date. Records for other places are excluded. An empty day exports the column headers without invented records. Filenames contain the location ID and selected date.
+
+
+## Deploy on Vercel
+
+Use two standalone projects from this repository:
+
+| Project | Root Directory | Framework | Build / output |
+| --- | --- | --- | --- |
+| ParkWise web | `parkwise/frontend-web` | Vite | `npm run build` / `dist` |
+| ParkWise API | `parkwise` | FastAPI | Automatic Python build; `app.py` exports the app |
+
+The older `frontend` directory is Streamlit and is not the current web interface. The repository-root API is a separate prototype. Select the directories above rather than auto-importing every detected application.
+
+1. Provision a hosted PostgreSQL database. A local SQLite file or encrypted backup is not a persistent cloud database. Keep the connection string private.
+2. Set backend environment variables: `DATABASE_URL` (SQLAlchemy `postgresql+psycopg://...` URL), a new random `JWT_SECRET_KEY`, `ENVIRONMENT=production`, and `DEMO_MODE=false`. Set `FRONTEND_BASE_URL` and `CORS_ORIGINS` to the web project's exact HTTPS origin, and `PASSWORD_RESET_URL` to that origin plus `/reset-password`. Configure SMTP variables privately if password recovery is required.
+3. Run Alembic migrations against the cloud database from a trusted environment: `python -m alembic -c backend/alembic.ini upgrade head` from `parkwise/`. Initialize the designated administrator with `python -m backend.app.cli.seed_admin --email dhruvjain1223@gmail.com --full-name "Dhruv Jain"` (password is prompted). Import existing local data separately if required; do not publish a plaintext database or secrets.
+4. Deploy the API project. Set the web project's `VITE_API_BASE_URL` to the API's HTTPS origin, without a trailing `/api` segment. This is a public API address, not a secret. Never put database or SMTP credentials in `VITE_` variables.
+5. Deploy the Vite project. `vercel.json` provides deep-link rewrites for `/login`, `/admin`, `/user`, and `/reset-password`. Update the API's frontend/CORS/reset URL variables to the final web URL and redeploy it.
+6. Verify sign-in, database writes, exports, reset emails, and QR links on the deployed URLs. Production QR codes must use the public web URL, not localhost or a Wi-Fi IP.
+
+Do not use `Start-ParkWise.ps1` to deploy: it is the local Wi-Fi launcher and sets local URL overrides. Vercel deployments use the cloud environment variables instead. The Python bundle includes ML dependencies; check the actual deployment build output for size/runtime compatibility.

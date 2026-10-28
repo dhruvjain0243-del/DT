@@ -1,6 +1,6 @@
 import type { Availability, Facility, Gate, Metrics, Prediction, ScanEvent, Scanner, ScannerSummary, Ticket, Tokens, Vehicle, Zone, Slot, ExitResult, User, CollegeFacility, CollegeProfile, CollegeSession, CollegeAction, CollegeQr, LocationReport } from "./types";
 
-const base = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000").replace(/\/$/, "");
+const base = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 export class ApiError extends Error { constructor(public status: number, message: string) { super(message); } }
 
 let accessToken = sessionStorage.getItem("parkwise_access_token");
