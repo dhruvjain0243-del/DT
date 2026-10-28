@@ -25,3 +25,5 @@ Thumbs.db
 # Local operational backups and logs
 outputs/*.sqlite
 outputs/*.log
+outputs/parkwise-backup-recovery.key
+outputs/parkwise-private-restored.zip
